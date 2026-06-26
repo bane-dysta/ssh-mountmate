@@ -128,6 +128,8 @@ GUI 支持：
 - 每个连接以卡片展示，包含挂载状态、盘符、名称、容量、账号/主机、远端路径。
 - 每个连接卡片提供 Mount/Unmount、Open、Edit、Delete 四个图标按钮；不可用动作会变灰。
 - 依赖检查和安装入口收纳在 Settings 中；启动时如果发现缺依赖，会主动询问是否安装。
+- Settings 支持全局缓存设置：cache root、VFS cache mode、max cache size、max cache age。
+- Settings 支持全局开机自启：登录 Windows 后挂载全部配置。
 - 为某个配置创建登录后自动挂载任务。
 - 关闭窗口会退出 GUI；已启动的 rclone 挂载进程继续在后台运行。
 

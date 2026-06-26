@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from tkinter import BOTH, END, LEFT, RIGHT, X, Y, Button, Canvas, Entry, Frame, Label, Listbox, Scrollbar, StringVar, Tk, Toplevel, filedialog, messagebox
+from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, Button, Canvas, Checkbutton, Entry, Frame, Label, Listbox, Scrollbar, StringVar, Tk, Toplevel, filedialog, messagebox
 from tkinter import ttk
 
 import rsshmount
@@ -22,6 +22,42 @@ def app_dir() -> Path:
 
 def servers_path() -> Path:
     return app_dir() / "servers.json"
+
+
+def settings_path() -> Path:
+    return app_dir() / "settings.json"
+
+
+def default_settings() -> dict:
+    return {
+        "cache_root": str(rsshmount.xdg_cache_home()),
+        "vfs_cache_mode": "writes",
+        "vfs_cache_max_size": "",
+        "vfs_cache_max_age": "",
+        "startup_all": False,
+    }
+
+
+def load_settings() -> dict:
+    settings = default_settings()
+    path = settings_path()
+    if path.exists():
+        try:
+            settings.update(json.loads(path.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    return settings
+
+
+def save_settings(settings: dict) -> None:
+    app_dir().mkdir(parents=True, exist_ok=True)
+    settings_path().write_text(json.dumps(settings, indent=2), encoding="utf-8")
+
+
+def configured_cache_dir(host: str) -> Path:
+    settings = load_settings()
+    root = settings.get("cache_root") or default_settings()["cache_root"]
+    return Path(root).expanduser() / host
 
 
 def bundled_dir() -> Path:
@@ -123,7 +159,27 @@ def server_state_file(server: dict) -> Path:
     return rsshmount.app_state_dir() / f"{server['id']}.json"
 
 
-def pid_is_running(pid: int) -> bool:
+def running_pid_set() -> set[int]:
+    if os.name != "nt":
+        return set()
+    result = subprocess.run(
+        ["tasklist", "/FO", "CSV", "/NH"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        creationflags=create_no_window(),
+    )
+    pids: set[int] = set()
+    for line in result.stdout.splitlines():
+        parts = [part.strip().strip('"') for part in line.split(",")]
+        if len(parts) > 1 and parts[1].isdigit():
+            pids.add(int(parts[1]))
+    return pids
+
+
+def pid_is_running(pid: int, pid_set: set[int] | None = None) -> bool:
+    if pid_set is not None:
+        return pid in pid_set
     if os.name == "nt":
         result = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
@@ -150,6 +206,18 @@ def mount_status(server: dict) -> str:
     except Exception:
         return "stale"
     return "mounted" if pid and pid_is_running(pid) else "stale"
+
+
+def mount_status_with_pids(server: dict, pid_set: set[int]) -> str:
+    state_file = server_state_file(server)
+    if not state_file.exists():
+        return "stopped"
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        pid = int(state.get("pid", 0))
+    except Exception:
+        return "stale"
+    return "mounted" if pid and pid_is_running(pid, pid_set) else "stale"
 
 
 def current_mountpoint(server: dict) -> str:
@@ -348,8 +416,9 @@ def mount_server(server: dict, rclone: str) -> dict:
     if mount_status(server) == "mounted":
         raise RuntimeError("This config is already mounted. Unmount it before mounting again.")
     ensure_remote(server, rclone)
+    settings = load_settings()
     state_dir = rsshmount.app_state_dir()
-    cache_dir = rsshmount.app_cache_dir(remote_name(server))
+    cache_dir = configured_cache_dir(remote_name(server))
     state_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -371,7 +440,7 @@ def mount_server(server: dict, rclone: str) -> dict:
         remote,
         mountpoint,
         "--vfs-cache-mode",
-        server.get("cache_mode", "writes"),
+        server.get("cache_mode") or settings.get("vfs_cache_mode", "writes"),
         "--vfs-fast-fingerprint",
         "--cache-dir",
         str(cache_dir),
@@ -382,6 +451,10 @@ def mount_server(server: dict, rclone: str) -> dict:
         "--volname",
         server.get("name") or remote_name(server),
     ]
+    if settings.get("vfs_cache_max_size"):
+        cmd.extend(["--vfs-cache-max-size", settings["vfs_cache_max_size"]])
+    if settings.get("vfs_cache_max_age"):
+        cmd.extend(["--vfs-cache-max-age", settings["vfs_cache_max_age"]])
     if server.get("network_mode"):
         cmd.append("--network-mode")
 
@@ -569,8 +642,9 @@ class App:
     def refresh_list(self) -> None:
         for child in self.cards_frame.winfo_children():
             child.destroy()
+        pid_set = running_pid_set() if os.name == "nt" else None
         for server in self.servers:
-            self.add_server_card(server)
+            self.add_server_card(server, pid_set)
         self.bind_cards_mousewheel_recursive(self.cards_frame)
 
     def on_cards_mousewheel(self, event) -> None:
@@ -590,8 +664,8 @@ class App:
         for child in widget.winfo_children():
             self.bind_cards_mousewheel_recursive(child)
 
-    def add_server_card(self, server: dict) -> None:
-        status = mount_status(server)
+    def add_server_card(self, server: dict, pid_set: set[int] | None = None) -> None:
+        status = mount_status_with_pids(server, pid_set) if pid_set is not None else mount_status(server)
         mounted = status == "mounted"
         row_bg = "#2a2a2a" if mounted else "#242424"
         muted = "#7d7d7d"
@@ -656,14 +730,81 @@ class App:
 
     def open_settings(self) -> None:
         self.check_dependencies()
+        settings = load_settings()
         window = Toplevel(self.root)
         window.title("Settings")
-        window.geometry("430x180")
+        window.geometry("520x430")
         frame = Frame(window, padx=14, pady=14)
         frame.pack(fill=BOTH, expand=True)
         Label(frame, textvariable=self.dep_status, anchor="w", justify=LEFT).pack(fill=X, pady=(0, 12))
         Button(frame, text="Check dependencies", command=self.check_dependencies_async).pack(fill=X, pady=3)
         Button(frame, text="Install missing dependencies", command=self.install_deps_async).pack(fill=X, pady=3)
+
+        ttk.Separator(frame).pack(fill=X, pady=12)
+
+        cache_root = StringVar(value=settings.get("cache_root", default_settings()["cache_root"]))
+        cache_mode = StringVar(value=settings.get("vfs_cache_mode", "writes"))
+        cache_max_size = StringVar(value=settings.get("vfs_cache_max_size", ""))
+        cache_max_age = StringVar(value=settings.get("vfs_cache_max_age", ""))
+        startup_all = BooleanVar(value=bool(settings.get("startup_all", False)))
+
+        cache_row = Frame(frame)
+        cache_row.pack(fill=X, pady=3)
+        Label(cache_row, text="Cache root", width=16, anchor="w").pack(side=LEFT)
+        Entry(cache_row, textvariable=cache_root).pack(side=LEFT, fill=X, expand=True)
+        Button(cache_row, text="...", command=lambda: self.pick_cache_root(cache_root)).pack(side=RIGHT)
+
+        mode_row = Frame(frame)
+        mode_row.pack(fill=X, pady=3)
+        Label(mode_row, text="VFS cache mode", width=16, anchor="w").pack(side=LEFT)
+        ttk.Combobox(mode_row, values=["off", "minimal", "writes", "full"], textvariable=cache_mode, state="readonly").pack(side=LEFT, fill=X, expand=True)
+
+        size_row = Frame(frame)
+        size_row.pack(fill=X, pady=3)
+        Label(size_row, text="Max cache size", width=16, anchor="w").pack(side=LEFT)
+        Entry(size_row, textvariable=cache_max_size).pack(side=LEFT, fill=X, expand=True)
+
+        age_row = Frame(frame)
+        age_row.pack(fill=X, pady=3)
+        Label(age_row, text="Max cache age", width=16, anchor="w").pack(side=LEFT)
+        Entry(age_row, textvariable=cache_max_age).pack(side=LEFT, fill=X, expand=True)
+
+        Checkbutton(frame, text="Mount all configs on Windows login", variable=startup_all).pack(anchor="w", pady=8)
+
+        def save() -> None:
+            new_settings = load_settings()
+            new_settings.update(
+                {
+                    "cache_root": cache_root.get().strip() or default_settings()["cache_root"],
+                    "vfs_cache_mode": cache_mode.get() or "writes",
+                    "vfs_cache_max_size": cache_max_size.get().strip(),
+                    "vfs_cache_max_age": cache_max_age.get().strip(),
+                    "startup_all": bool(startup_all.get()),
+                }
+            )
+            save_settings(new_settings)
+            self.apply_startup_setting(new_settings["startup_all"])
+            self.status.set("Settings saved.")
+            window.destroy()
+
+        Button(frame, text="Save settings", command=save).pack(fill=X, pady=(12, 0))
+
+    def pick_cache_root(self, variable: StringVar) -> None:
+        path = filedialog.askdirectory(initialdir=variable.get() or str(Path.home()))
+        if path:
+            variable.set(path)
+
+    def apply_startup_setting(self, enabled: bool) -> None:
+        if os.name != "nt":
+            return
+        for server in self.servers:
+            try:
+                if enabled:
+                    enable_startup(server)
+                else:
+                    disable_startup(server)
+            except Exception:
+                pass
 
     def install_deps_async(self) -> None:
         threading.Thread(target=self.install_deps, daemon=True).start()
@@ -690,6 +831,11 @@ class App:
         if dialog.result:
             self.servers.append(dialog.result)
             save_servers(self.servers)
+            if load_settings().get("startup_all"):
+                try:
+                    enable_startup(dialog.result)
+                except Exception:
+                    pass
             self.refresh_list()
 
     def edit_server(self, server: dict) -> None:
@@ -1030,7 +1176,7 @@ class ServerDialog:
             "key_file": self.get("key_file"),
             "remote_path": compose_remote_path(self.get("remote_base"), self.get("remote_suffix")),
             "mountpoint": mountpoint,
-            "cache_mode": "writes",
+            "cache_mode": self.existing.get("cache_mode", ""),
         }
 
         if self.auth.get() == "password":
