@@ -126,7 +126,7 @@ GUI 支持：
 密码不会明文写入 rclone 配置；保存时会通过 `rclone obscure` 转成 rclone 可识别的混淆值。
 密钥 passphrase 也按同样方式保存为混淆值，并写入 rclone 的 `key_file_pass`，避免每次挂载重复输入。
 
-如果需要真正的双击 `.exe`，在 Windows 机器上执行：
+正式交付物建议使用单文件 `.exe`。在 Windows 机器上执行：
 
 ```powershell
 .\scripts\build-windows-exe.ps1
@@ -135,8 +135,10 @@ GUI 支持：
 生成路径：
 
 ```text
-dist\SSHMountMate-win\SSHMountMate\SSHMountMate.exe
+dist\SSHMountMate.exe
 ```
+
+GitHub Actions 也会在 Windows runner 上构建并上传 `SSHMountMate.exe` artifact。
 
 卸载：
 

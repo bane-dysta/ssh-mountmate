@@ -1,11 +1,12 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$Dist = Join-Path $Root "dist\SSHMountMate-win"
+$Dist = Join-Path $Root "dist"
 
 python -m pip install --upgrade pyinstaller pystray pillow
 
 pyinstaller `
+  --onefile `
   --noconsole `
   --name SSHMountMate `
   --distpath $Dist `
@@ -15,4 +16,4 @@ pyinstaller `
   --hidden-import pystray._win32 `
   "$Root\rsshmount_gui.pyw"
 
-Write-Host "built: $(Join-Path $Dist 'SSHMountMate\SSHMountMate.exe')"
+Write-Host "built: $(Join-Path $Dist 'SSHMountMate.exe')"
