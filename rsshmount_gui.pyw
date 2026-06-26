@@ -768,8 +768,15 @@ class ServerDialog:
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
         self.canvas.pack(side=LEFT, fill=BOTH, expand=True)
         self.scrollbar.pack(side=RIGHT, fill=Y)
-        self.canvas.bind("<Enter>", lambda _event: self.canvas.bind_all("<MouseWheel>", self.on_mousewheel))
-        self.canvas.bind("<Leave>", lambda _event: self.canvas.unbind_all("<MouseWheel>"))
+        self.window.bind("<MouseWheel>", self.on_mousewheel)
+        self.window.bind("<Button-4>", self.on_mousewheel)
+        self.window.bind("<Button-5>", self.on_mousewheel)
+        self.canvas.bind("<MouseWheel>", self.on_mousewheel)
+        self.canvas.bind("<Button-4>", self.on_mousewheel)
+        self.canvas.bind("<Button-5>", self.on_mousewheel)
+        self.form.bind("<MouseWheel>", self.on_mousewheel)
+        self.form.bind("<Button-4>", self.on_mousewheel)
+        self.form.bind("<Button-5>", self.on_mousewheel)
         self.build()
 
     def row(self, label: str, key: str, default: str = "", browse=False, secret=False):
@@ -834,9 +841,24 @@ class ServerDialog:
         self.update_source_controls()
         if self.source.get() == "ssh_config" and not self.existing and host_default:
             self.apply_ssh_defaults(host_default)
+        self.bind_mousewheel_recursive(self.form)
 
     def on_mousewheel(self, event) -> None:
-        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        if getattr(event, "num", None) == 4:
+            direction = -1
+        elif getattr(event, "num", None) == 5:
+            direction = 1
+        else:
+            delta = getattr(event, "delta", 0)
+            direction = -1 if delta > 0 else 1
+        self.canvas.yview_scroll(direction, "units")
+
+    def bind_mousewheel_recursive(self, widget) -> None:
+        widget.bind("<MouseWheel>", self.on_mousewheel)
+        widget.bind("<Button-4>", self.on_mousewheel)
+        widget.bind("<Button-5>", self.on_mousewheel)
+        for child in widget.winfo_children():
+            self.bind_mousewheel_recursive(child)
 
     def pick_file(self, key: str) -> None:
         path = filedialog.askopenfilename()
