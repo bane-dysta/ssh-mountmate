@@ -313,13 +313,14 @@ def ssh_installed() -> bool:
     return shutil.which("ssh") is not None
 
 
-def run_visible_winget_install(title: str, package_id: str) -> None:
+def run_visible_winget_install(title: str, package_id: str) -> int:
     app_dir().mkdir(parents=True, exist_ok=True)
     script = app_dir() / f"install-{package_id.replace('.', '-')}.cmd"
     script.write_text(
         "\n".join(
             [
                 "@echo off",
+                f"title SSH MountMate - {title}",
                 f"echo Installing {package_id} with winget...",
                 f'winget install --id "{package_id}" -e --accept-package-agreements --accept-source-agreements',
                 "set RC=%ERRORLEVEL%",
@@ -338,11 +339,12 @@ def run_visible_winget_install(title: str, package_id: str) -> None:
         ),
         encoding="utf-8",
     )
-    subprocess.run(
+    result = subprocess.run(
         ["cmd.exe", "/c", f'call "{script}"'],
         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
-        check=True,
+        check=False,
     )
+    return result.returncode
 
 
 def install_rclone() -> None:
@@ -350,13 +352,20 @@ def install_rclone() -> None:
         return
     if os.name != "nt" or not shutil.which("winget"):
         raise RuntimeError("rclone is missing and winget is not available.")
-    run_visible_winget_install("rclone", "Rclone.Rclone")
+    code = run_visible_winget_install("rclone", "Rclone.Rclone")
+    if resolve_rclone_path():
+        return
+    raise RuntimeError(f"rclone was not found after winget finished. winget exit code: {code}. Please check the installer window output.")
 
 
 def install_winfsp() -> None:
-    if shutil.which("winget"):
-        run_visible_winget_install("WinFsp", "WinFsp.WinFsp")
+    if winfsp_installed():
         return
+    if shutil.which("winget"):
+        code = run_visible_winget_install("WinFsp", "WinFsp.WinFsp")
+        if winfsp_installed():
+            return
+        raise RuntimeError(f"WinFsp was not found after winget finished. winget exit code: {code}. Please check the installer window output.")
     raise RuntimeError("WinFsp is missing and winget is not available.")
 
 
