@@ -95,7 +95,7 @@ rsshmount.cmd --transport native mount gpu01 /home/ubuntu X:
 rsshmount.cmd --transport external mount gpu01 /home/ubuntu X:
 ```
 
-如果缺少 rclone 或 WinFsp，GUI 会提示并通过 `winget` 弹出命令行窗口安装。WinFsp 安装需要管理员权限；Windows 可能弹出 UAC 确认。
+如果缺少 rclone 或 WinFsp，GUI 会提示并通过 `winget` 弹出命令行窗口安装。安装输出也会写入 `%APPDATA%\rsshmount\install-*.log`，便于排查。WinFsp 安装需要管理员权限；Windows 可能弹出 UAC 确认。
 
 ## Windows GUI
 
@@ -108,7 +108,7 @@ GUI 入口：
 GUI 支持：
 
 - 启动时检查 rclone、WinFsp、OpenSSH。
-- 自动安装缺失依赖。Windows 上缺 rclone 或 WinFsp 时优先用 `winget` 安装，并弹出命令行窗口显示进度；安装成功后窗口保留 5 秒自动关闭，安装失败时窗口保留。
+- 自动安装缺失依赖。Windows 上缺 rclone 或 WinFsp 时优先用 `winget` 安装，并弹出命令行窗口显示进度，同时写入 `%APPDATA%\rsshmount\install-*.log`；安装成功后窗口保留 5 秒自动关闭，安装失败时窗口保留。
 - 通过一个入口添加配置：可选择从 SSH config 导入，或手动填写。
 - 从 SSH config 导入时会列出 `Host` 条目，选择后自动填充 Name、IP/Host、用户名、端口、密钥路径，并允许继续手动修改。
 - 手动添加服务器：IP/Host、用户名、端口、密钥或密码。

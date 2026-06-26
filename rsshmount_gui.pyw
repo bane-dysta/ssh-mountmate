@@ -313,36 +313,68 @@ def ssh_installed() -> bool:
     return shutil.which("ssh") is not None
 
 
-def run_visible_winget_install(title: str, package_id: str) -> int:
+def ps_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def run_visible_winget_install(title: str, package_id: str) -> tuple[int, Path]:
     app_dir().mkdir(parents=True, exist_ok=True)
     script = app_dir() / f"install-{package_id.replace('.', '-')}.cmd"
+    ps_script = app_dir() / f"install-{package_id.replace('.', '-')}.ps1"
+    log_path = app_dir() / f"install-{package_id.replace('.', '-')}.log"
+    ps_script.write_text(
+        "\n".join(
+            [
+                "$ErrorActionPreference = 'Continue'",
+                f"$LogPath = {ps_quote(str(log_path))}",
+                "New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LogPath) | Out-Null",
+                'function Write-InstallLog([string]$Message) { $Message | Tee-Object -FilePath $LogPath -Append }',
+                'Write-InstallLog ""',
+                'Write-InstallLog "==== SSH MountMate dependency install ===="',
+                'Write-InstallLog ("Started: " + (Get-Date -Format o))',
+                f'Write-InstallLog "Package: {package_id}"',
+                'Write-InstallLog ("Log: " + $LogPath)',
+                "$Winget = Get-Command winget.exe -ErrorAction SilentlyContinue",
+                "if (-not $Winget) {",
+                '  Write-InstallLog "winget.exe was not found in PATH."',
+                '  Write-InstallLog "Install App Installer from Microsoft Store, then retry."',
+                '  Write-InstallLog ""',
+                "  exit 9009",
+                "}",
+                'Write-InstallLog ("winget: " + $Winget.Source)',
+                'Write-InstallLog ""',
+                f'& winget install --id "{package_id}" -e --accept-package-agreements --accept-source-agreements 2>&1 | Tee-Object -FilePath $LogPath -Append',
+                "$RC = $LASTEXITCODE",
+                'Write-InstallLog ""',
+                'Write-InstallLog ("Finished: " + (Get-Date -Format o))',
+                'Write-InstallLog ("Exit code: " + $RC)',
+                "if ($RC -eq 0) {",
+                '  Write-InstallLog "Installation succeeded. This window will close in 5 seconds..."',
+                '  timeout.exe /t 5 /nobreak | Tee-Object -FilePath $LogPath -Append',
+                "  exit 0",
+                "}",
+                'Write-InstallLog "Installation failed."',
+                "exit $RC",
+            ]
+        ),
+        encoding="utf-8",
+    )
     script.write_text(
         "\n".join(
             [
                 "@echo off",
                 f"title SSH MountMate - {title}",
-                "where winget.exe >nul 2>nul",
-                'if not "%ERRORLEVEL%"=="0" (',
-                "  echo winget.exe was not found in PATH.",
-                "  echo Install App Installer from Microsoft Store, then retry.",
+                f'echo Log file: "{log_path}"',
+                "echo.",
+                f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{ps_script}"',
+                "set RC=%ERRORLEVEL%",
+                'if not "%RC%"=="0" (',
                 "  echo.",
+                "  echo Installation failed or could not start. Exit code: %RC%",
+                f'  echo Log file: "{log_path}"',
                 "  echo This window will stay open so you can review the output.",
                 "  cmd /k",
-                "  exit /b 9009",
                 ")",
-                f"echo Installing {package_id} with winget...",
-                f'winget install --id "{package_id}" -e --accept-package-agreements --accept-source-agreements',
-                "set RC=%ERRORLEVEL%",
-                'if "%RC%"=="0" (',
-                "  echo.",
-                "  echo Installation succeeded. This window will close in 5 seconds...",
-                "  timeout /t 5 /nobreak",
-                "  exit /b 0",
-                ")",
-                "echo.",
-                "echo Installation failed with code %RC%.",
-                "echo This window will stay open so you can review the output.",
-                "cmd /k",
                 "exit /b %RC%",
             ]
         ),
@@ -353,7 +385,7 @@ def run_visible_winget_install(title: str, package_id: str) -> int:
         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
         check=False,
     )
-    return result.returncode
+    return result.returncode, log_path
 
 
 def install_rclone() -> None:
@@ -361,10 +393,10 @@ def install_rclone() -> None:
         return
     if os.name != "nt":
         raise RuntimeError("rclone is missing. Install rclone and retry.")
-    code = run_visible_winget_install("rclone", "Rclone.Rclone")
+    code, log_path = run_visible_winget_install("rclone", "Rclone.Rclone")
     if resolve_rclone_path():
         return
-    raise RuntimeError(f"rclone was not found after winget finished. winget exit code: {code}. Please check the installer window output.")
+    raise RuntimeError(f"rclone was not found after winget finished. winget exit code: {code}. Log: {log_path}")
 
 
 def install_winfsp() -> None:
@@ -372,10 +404,10 @@ def install_winfsp() -> None:
         return
     if os.name != "nt":
         raise RuntimeError("WinFsp is only required on Windows.")
-    code = run_visible_winget_install("WinFsp", "WinFsp.WinFsp")
+    code, log_path = run_visible_winget_install("WinFsp", "WinFsp.WinFsp")
     if winfsp_installed():
         return
-    raise RuntimeError(f"WinFsp was not found after winget finished. winget exit code: {code}. Please check the installer window output.")
+    raise RuntimeError(f"WinFsp was not found after winget finished. winget exit code: {code}. Log: {log_path}")
 
 
 def install_openssh_client() -> None:
