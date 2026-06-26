@@ -152,6 +152,39 @@ def mount_status(server: dict) -> str:
     return "mounted" if pid and pid_is_running(pid) else "stale"
 
 
+def current_mountpoint(server: dict) -> str:
+    state_file = server_state_file(server)
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            if state.get("mountpoint"):
+                return state["mountpoint"]
+        except Exception:
+            pass
+    configured = server.get("mountpoint") or ""
+    if configured and configured.lower() != "auto":
+        return configured
+    return str(rsshmount.default_mountpoint(remote_name(server)))
+
+
+def display_mountpoint(server: dict) -> str:
+    mountpoint = current_mountpoint(server)
+    return mountpoint if mountpoint else "Auto"
+
+
+def capacity_text(server: dict) -> str:
+    if mount_status(server) != "mounted":
+        return "unknown capacity"
+    mountpoint = current_mountpoint(server)
+    try:
+        usage = shutil.disk_usage(mountpoint)
+    except OSError:
+        return "unknown capacity"
+    total = usage.total / (1024 ** 3)
+    free = usage.free / (1024 ** 3)
+    return f"{free:.1f} GiB free / {total:.1f} GiB"
+
+
 def mountpoint_choices() -> list[str]:
     if os.name != "nt":
         return ["Auto"]
@@ -271,6 +304,8 @@ def write_manual_remote(server: dict, rclone: str) -> None:
         parser.set(remote, "pass", server["password_obscured"])
     elif server.get("key_file"):
         parser.set(remote, "key_file", server["key_file"])
+        if server.get("key_pass_obscured"):
+            parser.set(remote, "key_file_pass", server["key_pass_obscured"])
     else:
         parser.set(remote, "key_use_agent", "true")
 
@@ -426,27 +461,14 @@ class App:
         body = Frame(self.root, padx=10, pady=4)
         body.pack(fill=BOTH, expand=True)
 
-        left = Frame(body)
-        left.pack(side=LEFT, fill=BOTH, expand=True)
-        self.listbox = Listbox(left, height=16)
-        self.listbox.pack(fill=BOTH, expand=True)
-
-        right = Frame(body, padx=10)
-        right.pack(side=RIGHT, fill="y")
-        Button(right, text="Add config", width=24, command=self.add_config).pack(pady=3)
-        Button(right, text="Edit", width=24, command=self.edit_selected).pack(pady=3)
-        Button(right, text="Delete", width=24, command=self.delete_selected).pack(pady=3)
-        ttk.Separator(right).pack(fill=X, pady=8)
-        Button(right, text="Mount", width=24, command=self.mount_selected).pack(pady=3)
-        Button(right, text="Unmount", width=24, command=self.unmount_selected).pack(pady=3)
-        Button(right, text="Refresh status", width=24, command=self.refresh_list).pack(pady=3)
-        ttk.Separator(right).pack(fill=X, pady=8)
-        Button(right, text="Enable startup mount", width=24, command=self.enable_startup_selected).pack(pady=3)
-        Button(right, text="Disable startup mount", width=24, command=self.disable_startup_selected).pack(pady=3)
+        self.cards_frame = Frame(body, bg="#202020")
+        self.cards_frame.pack(fill=BOTH, expand=True)
 
         bottom = Frame(self.root, padx=10, pady=8)
         bottom.pack(fill=X)
         Label(bottom, textvariable=self.status).pack(side=LEFT)
+        Button(bottom, text="Add config", command=self.add_config).pack(side=RIGHT)
+        Button(bottom, text="Refresh", command=self.refresh_list).pack(side=RIGHT, padx=6)
 
     def setup_tray(self) -> None:
         try:
@@ -492,9 +514,39 @@ class App:
         return self.servers[selection[0]]
 
     def refresh_list(self) -> None:
-        self.listbox.delete(0, END)
+        for child in self.cards_frame.winfo_children():
+            child.destroy()
         for server in self.servers:
-            self.listbox.insert(END, server_label(server))
+            self.add_server_card(server)
+
+    def add_server_card(self, server: dict) -> None:
+        status = mount_status(server)
+        mounted = status == "mounted"
+        row_bg = "#2a2a2a" if mounted else "#242424"
+        muted = "#7d7d7d"
+        fg = "#f1f1f1" if mounted else "#bdbdbd"
+
+        row = Frame(self.cards_frame, bg=row_bg, padx=12, pady=10)
+        row.pack(fill=X, pady=4)
+
+        left = Frame(row, bg=row_bg, width=90)
+        left.pack(side=LEFT, fill="y")
+        Label(left, text="🛡", bg=row_bg, fg=fg, font=("Segoe UI Emoji", 28)).pack(anchor="w")
+        Label(left, text=status, bg=row_bg, fg=muted, font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0))
+
+        mid = Frame(row, bg=row_bg)
+        mid.pack(side=LEFT, fill=BOTH, expand=True)
+        drive = display_mountpoint(server)
+        Label(mid, text=f"{drive}  {server.get('name') or server.get('id')}", bg=row_bg, fg=fg, font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        Label(mid, text=capacity_text(server), bg=row_bg, fg="#c8c8c8", font=("Segoe UI", 10)).pack(anchor="w")
+        Label(mid, text=f"{server.get('user', '')}@{server.get('host', '')}", bg=row_bg, fg=muted, font=("Segoe UI", 10)).pack(anchor="e", fill=X)
+        Label(mid, text=server.get("remote_path") or "~", bg=row_bg, fg=muted, font=("Segoe UI", 10)).pack(anchor="e", fill=X)
+
+        actions = Frame(row, bg=row_bg)
+        actions.pack(side=RIGHT)
+        Button(actions, text="Unmount" if mounted else "Mount", width=10, command=lambda s=server: self.toggle_mount(s)).pack(side=LEFT, padx=4)
+        Button(actions, text="Open", width=8, command=lambda s=server: self.open_folder(s)).pack(side=LEFT, padx=4)
+        Button(actions, text="Edit", width=8, command=lambda s=server: self.edit_server(s)).pack(side=LEFT, padx=4)
 
     def check_dependencies_async(self) -> None:
         threading.Thread(target=self.check_dependencies, daemon=True).start()
@@ -531,6 +583,48 @@ class App:
             self.servers.append(dialog.result)
             save_servers(self.servers)
             self.refresh_list()
+
+    def edit_server(self, server: dict) -> None:
+        try:
+            index = self.servers.index(server)
+        except ValueError:
+            return
+        dialog = ServerDialog(self.root, rclone=self.rclone, existing=server)
+        self.root.wait_window(dialog.window)
+        if dialog.result:
+            self.servers[index] = dialog.result
+            save_servers(self.servers)
+            self.refresh_list()
+
+    def toggle_mount(self, server: dict) -> None:
+        if mount_status(server) == "mounted":
+            try:
+                unmount_server(server)
+                self.status.set("Unmounted.")
+            except Exception as exc:
+                messagebox.showerror(APP_TITLE, str(exc))
+        else:
+            try:
+                state = mount_server(server, self.rclone)
+                self.status.set(f"Mounted {state['remote']} at {state['mountpoint']}")
+            except Exception as exc:
+                messagebox.showerror(APP_TITLE, str(exc))
+        self.refresh_list()
+
+    def open_folder(self, server: dict) -> None:
+        if mount_status(server) != "mounted":
+            messagebox.showinfo(APP_TITLE, "Mount this config before opening its folder.")
+            return
+        mountpoint = current_mountpoint(server)
+        try:
+            if os.name == "nt":
+                os.startfile(mountpoint)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", mountpoint])
+            else:
+                subprocess.Popen(["xdg-open", mountpoint])
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, str(exc))
 
     def edit_selected(self) -> None:
         selection = self.listbox.curselection()
@@ -662,6 +756,7 @@ class ServerDialog:
         ttk.Radiobutton(auth_frame, text="Key", variable=self.auth, value="key").pack(side=LEFT)
         ttk.Radiobutton(auth_frame, text="Password", variable=self.auth, value="password").pack(side=LEFT)
         self.row("Key file", "key_file", self.existing.get("key_file", ""), browse=True)
+        self.row("Key passphrase", "key_passphrase", secret=True)
         self.row("Password", "password", secret=True)
 
         self.row("Remote path", "remote_path", self.existing.get("remote_path", ""))
@@ -760,6 +855,16 @@ class ServerDialog:
                 except Exception as exc:
                     messagebox.showerror(APP_TITLE, str(exc))
                     return
+        elif self.auth.get() == "key":
+            key_passphrase = self.get("key_passphrase")
+            if key_passphrase:
+                try:
+                    result["key_pass_obscured"] = obscure_password(self.rclone, key_passphrase)
+                except Exception as exc:
+                    messagebox.showerror(APP_TITLE, str(exc))
+                    return
+            elif self.existing.get("key_pass_obscured"):
+                result["key_pass_obscured"] = self.existing["key_pass_obscured"]
         self.result = result
         self.window.destroy()
 
