@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NAME="rsshmount-windows-amd64"
+NAME="ssh-mountmate-windows"
 TMP="$(mktemp -d)"
 DIST="$TMP/$NAME"
 
@@ -11,15 +11,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$DIST/scripts" "$ROOT/dist"
+mkdir -p "$DIST/app" "$ROOT/dist"
 
-cp "$ROOT/rsshmount.py" "$DIST/rsshmount.py"
-cp "$ROOT/rsshmount_gui.pyw" "$DIST/rsshmount_gui.pyw"
-cp "$ROOT/rsshmount.cmd" "$DIST/rsshmount.cmd"
-cp "$ROOT/rsshmount-gui.cmd" "$DIST/rsshmount-gui.cmd"
-cp "$ROOT/install.ps1" "$DIST/install.ps1"
-cp "$ROOT/scripts/build-windows-exe.ps1" "$DIST/scripts/build-windows-exe.ps1"
+cp "$ROOT/启动 SSH MountMate.cmd" "$DIST/启动 SSH MountMate.cmd"
 cp "$ROOT/README.md" "$DIST/README.md"
+cp "$ROOT/rsshmount.py" "$DIST/app/rsshmount.py"
+cp "$ROOT/rsshmount_gui.pyw" "$DIST/app/rsshmount_gui.pyw"
+cp "$ROOT/rsshmount.cmd" "$DIST/app/rsshmount.cmd"
+cp "$ROOT/rsshmount-gui.cmd" "$DIST/app/rsshmount-gui.cmd"
+cp "$ROOT/install.ps1" "$DIST/app/install.ps1"
 
 python3 - "$ROOT/dist/$NAME.zip" "$DIST" "$NAME" <<'PY'
 import os

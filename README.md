@@ -75,7 +75,7 @@ ssh gpu01 true
 解压后的发布包目录运行：
 
 ```bat
-rsshmount-gui.cmd
+启动 SSH MountMate.cmd
 ```
 
 也可以继续使用命令行：
@@ -102,7 +102,7 @@ rsshmount.cmd --transport external mount gpu01 /home/ubuntu X:
 GUI 入口：
 
 ```bat
-rsshmount-gui.cmd
+启动 SSH MountMate.cmd
 ```
 
 GUI 支持：
@@ -224,21 +224,21 @@ rsshmount-linux-amd64/
 脚本会生成：
 
 ```text
-dist/rsshmount-windows-amd64.zip
+dist/ssh-mountmate-windows.zip
 ```
 
 发布包结构：
 
 ```text
-rsshmount-windows-amd64/
-  rsshmount.py
-  rsshmount_gui.pyw
-  rsshmount.cmd
-  rsshmount-gui.cmd
-  install.ps1
-  scripts/
-    build-windows-exe.ps1
+ssh-mountmate-windows/
+  启动 SSH MountMate.cmd
   README.md
+  app/
+    rsshmount.py
+    rsshmount_gui.pyw
+    rsshmount.cmd
+    rsshmount-gui.cmd
+    install.ps1
 ```
 
 ## 自定义 SSH config
