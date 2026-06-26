@@ -338,7 +338,7 @@ def run_visible_winget_install(title: str, package_id: str) -> None:
         ),
         encoding="utf-8",
     )
-    subprocess.run(["cmd.exe", "/c", f'start "SSH MountMate {title}" /wait "{script}"'], check=True)
+    subprocess.run(["cmd.exe", "/c", f'start "" /wait "{script}"'], check=True)
 
 
 def install_rclone() -> None:
