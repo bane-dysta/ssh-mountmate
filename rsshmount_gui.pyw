@@ -321,6 +321,15 @@ def run_visible_winget_install(title: str, package_id: str) -> int:
             [
                 "@echo off",
                 f"title SSH MountMate - {title}",
+                "where winget.exe >nul 2>nul",
+                'if not "%ERRORLEVEL%"=="0" (',
+                "  echo winget.exe was not found in PATH.",
+                "  echo Install App Installer from Microsoft Store, then retry.",
+                "  echo.",
+                "  echo This window will stay open so you can review the output.",
+                "  cmd /k",
+                "  exit /b 9009",
+                ")",
                 f"echo Installing {package_id} with winget...",
                 f'winget install --id "{package_id}" -e --accept-package-agreements --accept-source-agreements',
                 "set RC=%ERRORLEVEL%",
@@ -350,8 +359,8 @@ def run_visible_winget_install(title: str, package_id: str) -> int:
 def install_rclone() -> None:
     if resolve_rclone_path():
         return
-    if os.name != "nt" or not shutil.which("winget"):
-        raise RuntimeError("rclone is missing and winget is not available.")
+    if os.name != "nt":
+        raise RuntimeError("rclone is missing. Install rclone and retry.")
     code = run_visible_winget_install("rclone", "Rclone.Rclone")
     if resolve_rclone_path():
         return
@@ -361,12 +370,12 @@ def install_rclone() -> None:
 def install_winfsp() -> None:
     if winfsp_installed():
         return
-    if shutil.which("winget"):
-        code = run_visible_winget_install("WinFsp", "WinFsp.WinFsp")
-        if winfsp_installed():
-            return
-        raise RuntimeError(f"WinFsp was not found after winget finished. winget exit code: {code}. Please check the installer window output.")
-    raise RuntimeError("WinFsp is missing and winget is not available.")
+    if os.name != "nt":
+        raise RuntimeError("WinFsp is only required on Windows.")
+    code = run_visible_winget_install("WinFsp", "WinFsp.WinFsp")
+    if winfsp_installed():
+        return
+    raise RuntimeError(f"WinFsp was not found after winget finished. winget exit code: {code}. Please check the installer window output.")
 
 
 def install_openssh_client() -> None:
