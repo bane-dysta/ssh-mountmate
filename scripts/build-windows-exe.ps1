@@ -13,6 +13,7 @@ pyinstaller `
   --workpath (Join-Path $Root "build\pyinstaller") `
   --specpath (Join-Path $Root "build") `
   --add-data "$Root\app\rsshmount.py;." `
+  --add-data "$Root\app\assets;assets" `
   --hidden-import pystray._win32 `
   "$Root\app\rsshmount_gui.pyw"
 

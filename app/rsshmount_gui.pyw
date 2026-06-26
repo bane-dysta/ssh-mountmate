@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import ctypes
 import glob
 import json
+import locale
 import os
 import shutil
 import subprocess
@@ -10,6 +12,7 @@ import threading
 import time
 from pathlib import Path
 from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, Button, Canvas, Checkbutton, Entry, Frame, Label, Scrollbar, StringVar, Tk, Toplevel, filedialog, messagebox
+from tkinter import font as tkfont
 from tkinter import ttk
 
 import rsshmount
@@ -18,6 +21,143 @@ import rsshmount
 APP_TITLE = "SSH MountMate"
 CACHE_SIZE_CHOICES = ["default (off)", "1G", "5G", "10G", "20G", "50G", "100G", "500G"]
 CACHE_AGE_CHOICES = ["default (1h0m0s)", "5m", "15m", "30m", "1h", "6h", "24h", "168h"]
+LANGUAGE_CHOICES = {"auto": "Auto", "en": "English", "zh": "中文"}
+FONT_FAMILY_EN = "Segoe UI"
+FONT_FAMILY_ZH = "Noto Sans CJK SC"
+TEXT = {
+    "en": {
+        "ready": "Ready",
+        "loading_configs": "Loading configs...",
+        "no_configs": "No configs yet.",
+        "settings": "Settings",
+        "add_config": "Add config",
+        "refresh": "Refresh",
+        "checking_deps": "Checking dependencies...",
+        "check_dependencies": "Check dependencies",
+        "install_missing_dependencies": "Install missing dependencies",
+        "missing_dependencies": "Missing dependencies: {items}. Install now?",
+        "deps_status": "rclone: {rclone}    WinFsp: {winfsp}    ssh: {ssh}",
+        "ok": "ok",
+        "missing": "missing",
+        "cache_root": "Cache root",
+        "vfs_cache_mode": "VFS cache mode",
+        "max_cache_size": "Max cache size",
+        "max_cache_age": "Max cache age",
+        "startup_all": "Mount all configs on Windows login",
+        "language": "Language",
+        "save_settings": "Save settings",
+        "settings_saved": "Settings saved.",
+        "installing_deps": "Installing missing dependencies...",
+        "deps_complete": "Dependency check complete.",
+        "deps_failed": "Dependency installation failed.",
+        "mount": "Mount",
+        "unmount": "Unmount",
+        "open_folder": "Open mounted folder",
+        "edit_mount": "Edit mount information",
+        "delete_config": "Delete this config",
+        "checking_capacity": "checking capacity",
+        "unknown_capacity": "unknown capacity",
+        "mounted_status": "mounted",
+        "stopped_status": "stopped",
+        "stale_status": "stale",
+        "checking_status": "checking",
+        "mounted_at": "Mounted {remote} at {mountpoint}",
+        "unmounted": "Unmounted.",
+        "mount_before_open": "Mount this config before opening its folder.",
+        "delete_mounted_confirm": "{name} is mounted. Unmount and delete this config?",
+        "delete_confirm": "Delete config {name}?",
+        "deleted": "Deleted {name}.",
+        "add_config_title": "Add config",
+        "edit_config_title": "Edit config",
+        "source": "Source",
+        "ssh_config": "SSH config",
+        "manual": "Manual",
+        "ssh_host": "SSH Host",
+        "name": "Name",
+        "ip_host": "IP / Host",
+        "user": "User",
+        "port": "Port",
+        "auth": "Auth",
+        "key": "Key",
+        "password_auth": "Password",
+        "key_file": "Key file",
+        "key_passphrase": "Key passphrase",
+        "password": "Password",
+        "remote_path": "Remote path",
+        "mountpoint": "Mountpoint",
+        "save": "Save",
+        "cancel": "Cancel",
+        "name_required": "Name is required.",
+        "host_user_required": "IP/Host and user are required.",
+        "password_required": "Password is required.",
+    },
+    "zh": {
+        "ready": "就绪",
+        "loading_configs": "正在加载配置...",
+        "no_configs": "暂无配置。",
+        "settings": "设置",
+        "add_config": "新增配置",
+        "refresh": "刷新",
+        "checking_deps": "正在检查依赖...",
+        "check_dependencies": "检查依赖",
+        "install_missing_dependencies": "安装缺失依赖",
+        "missing_dependencies": "缺少依赖：{items}。现在安装吗？",
+        "deps_status": "rclone：{rclone}    WinFsp：{winfsp}    ssh：{ssh}",
+        "ok": "正常",
+        "missing": "缺失",
+        "cache_root": "缓存目录",
+        "vfs_cache_mode": "VFS 缓存模式",
+        "max_cache_size": "最大缓存大小",
+        "max_cache_age": "最大缓存寿命",
+        "startup_all": "Windows 登录时挂载全部配置",
+        "language": "语言",
+        "save_settings": "保存设置",
+        "settings_saved": "设置已保存。",
+        "installing_deps": "正在安装缺失依赖...",
+        "deps_complete": "依赖检查完成。",
+        "deps_failed": "依赖安装失败。",
+        "mount": "挂载",
+        "unmount": "取消挂载",
+        "open_folder": "打开挂载目录",
+        "edit_mount": "编辑挂载信息",
+        "delete_config": "删除此配置",
+        "checking_capacity": "正在检查容量",
+        "unknown_capacity": "容量未知",
+        "mounted_status": "已挂载",
+        "stopped_status": "未挂载",
+        "stale_status": "状态过期",
+        "checking_status": "检查中",
+        "mounted_at": "已挂载 {remote} 到 {mountpoint}",
+        "unmounted": "已取消挂载。",
+        "mount_before_open": "请先挂载此配置，再打开目录。",
+        "delete_mounted_confirm": "{name} 正在挂载。是否取消挂载并删除此配置？",
+        "delete_confirm": "删除配置 {name}？",
+        "deleted": "已删除 {name}。",
+        "add_config_title": "新增配置",
+        "edit_config_title": "编辑配置",
+        "source": "来源",
+        "ssh_config": "SSH 配置",
+        "manual": "手动",
+        "ssh_host": "SSH Host",
+        "name": "名称",
+        "ip_host": "IP / 主机",
+        "user": "用户名",
+        "port": "端口",
+        "auth": "认证",
+        "key": "密钥",
+        "password_auth": "密码",
+        "key_file": "密钥文件",
+        "key_passphrase": "密钥短语",
+        "password": "密码",
+        "remote_path": "远程路径",
+        "mountpoint": "挂载点",
+        "save": "保存",
+        "cancel": "取消",
+        "name_required": "名称必填。",
+        "host_user_required": "IP/主机和用户名必填。",
+        "password_required": "密码必填。",
+    },
+}
 def app_dir() -> Path:
     return rsshmount.app_config_dir()
 
@@ -37,6 +177,7 @@ def default_settings() -> dict:
         "vfs_cache_max_size": "",
         "vfs_cache_max_age": "",
         "startup_all": False,
+        "language": "auto",
     }
 
 
@@ -70,10 +211,70 @@ def choice_to_setting(value: str) -> str:
     return "" if value.startswith("default ") else value
 
 
+def system_language() -> str:
+    try:
+        lang = locale.getlocale()[0] or locale.getdefaultlocale()[0] or ""
+    except Exception:
+        lang = ""
+    return "zh" if lang.lower().startswith("zh") else "en"
+
+
+def effective_language(settings: dict | None = None) -> str:
+    value = (settings or load_settings()).get("language", "auto")
+    if value == "zh":
+        return "zh"
+    if value == "en":
+        return "en"
+    return system_language()
+
+
+def tr_lang(lang: str, key: str, **kwargs) -> str:
+    text = TEXT.get(lang, TEXT["en"]).get(key, TEXT["en"].get(key, key))
+    return text.format(**kwargs) if kwargs else text
+
+
+def language_choice_from_setting(value: str) -> str:
+    return LANGUAGE_CHOICES.get(value or "auto", LANGUAGE_CHOICES["auto"])
+
+
+def language_setting_from_choice(value: str) -> str:
+    for key, label in LANGUAGE_CHOICES.items():
+        if value == label:
+            return key
+    return "auto"
+
+
 def bundled_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+def asset_dir() -> Path:
+    return bundled_dir() / "assets"
+
+
+def embedded_chinese_font() -> Path:
+    return asset_dir() / "fonts" / "NotoSansCJKsc-Regular.otf"
+
+
+def load_embedded_chinese_font() -> bool:
+    font_path = embedded_chinese_font()
+    if not font_path.exists() or os.name != "nt":
+        return font_path.exists()
+    try:
+        return bool(ctypes.windll.gdi32.AddFontResourceExW(str(font_path), 0x10, 0))
+    except Exception:
+        return False
+
+
+def configure_default_fonts(root: Tk, lang: str) -> None:
+    family = FONT_FAMILY_ZH if lang == "zh" and load_embedded_chinese_font() else FONT_FAMILY_EN
+    for name in ["TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont"]:
+        try:
+            tkfont.nametofont(name).configure(family=family)
+        except Exception:
+            pass
 
 
 def bundled_rclone_path() -> Path:
@@ -697,10 +898,13 @@ class App:
         self.root = root
         self.root.title(APP_TITLE)
         self.root.geometry("760x460")
+        self.settings = load_settings()
+        self.lang = effective_language(self.settings)
+        configure_default_fonts(self.root, self.lang)
         self.servers: list[dict] = []
         self.rclone = ""
 
-        self.status = StringVar(value="Loading configs...")
+        self.status = StringVar(value=self.t("loading_configs"))
         self.dep_status = StringVar(value="")
         self.prompted_deps = False
         self.configs_loaded = False
@@ -714,6 +918,23 @@ class App:
         self.refresh_list()
         self.root.after_idle(self.start_background_startup)
 
+    def t(self, key: str, **kwargs) -> str:
+        return tr_lang(self.lang, key, **kwargs)
+
+    def status_text(self, status: str) -> str:
+        return {
+            "mounted": self.t("mounted_status"),
+            "stopped": self.t("stopped_status"),
+            "stale": self.t("stale_status"),
+            "checking": self.t("checking_status"),
+        }.get(status, status)
+
+    def rebuild(self) -> None:
+        for child in self.root.winfo_children():
+            child.destroy()
+        self.build()
+        self.refresh_list()
+
     def start_background_startup(self) -> None:
         self.reload_configs_async()
         self.check_dependencies_async()
@@ -722,9 +943,9 @@ class App:
         top = Frame(self.root, padx=10, pady=8)
         top.pack(fill=X)
         Label(top, text="ssh-mountmate").pack(side=LEFT)
-        Button(top, text="Settings", command=self.open_settings).pack(side=RIGHT, padx=6)
-        Button(top, text="Add config", command=self.add_config).pack(side=RIGHT, padx=6)
-        Button(top, text="Refresh", command=self.reload_configs_async).pack(side=RIGHT)
+        Button(top, text=self.t("settings"), command=self.open_settings).pack(side=RIGHT, padx=6)
+        Button(top, text=self.t("add_config"), command=self.add_config).pack(side=RIGHT, padx=6)
+        Button(top, text=self.t("refresh"), command=self.reload_configs_async).pack(side=RIGHT)
 
         body = Frame(self.root, padx=10, pady=4)
         body.pack(fill=BOTH, expand=True)
@@ -758,7 +979,7 @@ class App:
         if not self.configs_loaded:
             Label(
                 self.cards_frame,
-                text="Loading configs...",
+                text=self.t("loading_configs"),
                 bg="#202020",
                 fg="#bdbdbd",
                 font=("Segoe UI", 11),
@@ -768,7 +989,7 @@ class App:
         if not self.servers:
             Label(
                 self.cards_frame,
-                text="No configs yet.",
+                text=self.t("no_configs"),
                 bg="#202020",
                 fg="#bdbdbd",
                 font=("Segoe UI", 11),
@@ -783,7 +1004,7 @@ class App:
         self.bind_cards_mousewheel_recursive(self.cards_frame)
 
     def reload_configs_async(self) -> None:
-        self.status.set("Loading configs...")
+        self.status.set(self.t("loading_configs"))
 
         def worker() -> None:
             servers = load_servers()
@@ -794,7 +1015,7 @@ class App:
     def apply_loaded_configs(self, servers: list[dict]) -> None:
         self.servers = servers
         self.configs_loaded = True
-        self.status.set("Ready")
+        self.status.set(self.t("ready"))
         self.refresh_list()
         self.refresh_mount_status_async()
 
@@ -854,23 +1075,24 @@ class App:
         left = Frame(row, bg=row_bg, width=90)
         left.pack(side=LEFT, fill="y")
         Label(left, text="🛡", bg=row_bg, fg=fg, font=("Segoe UI Emoji", 28)).pack(anchor="w")
-        Label(left, text=status, bg=row_bg, fg=muted, font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0))
+        Label(left, text=self.status_text(status), bg=row_bg, fg=muted, font=(FONT_FAMILY_ZH if self.lang == "zh" else FONT_FAMILY_EN, 9)).pack(anchor="w", pady=(6, 0))
 
         mid = Frame(row, bg=row_bg)
         mid.pack(side=LEFT, fill=BOTH, expand=True)
         drive = display_mountpoint(server)
-        capacity_label = (capacity or "checking capacity") if mounted else "unknown capacity"
-        Label(mid, text=f"{drive}  {server.get('name') or server.get('id')}", bg=row_bg, fg=fg, font=("Segoe UI", 13, "bold")).pack(anchor="w")
-        Label(mid, text=capacity_label, bg=row_bg, fg="#c8c8c8", font=("Segoe UI", 10)).pack(anchor="w")
-        Label(mid, text=f"{server.get('user', '')}@{server.get('host', '')}", bg=row_bg, fg=muted, font=("Segoe UI", 10)).pack(anchor="e", fill=X)
-        Label(mid, text=server.get("remote_path") or "~", bg=row_bg, fg=muted, font=("Segoe UI", 10)).pack(anchor="e", fill=X)
+        capacity_label = (capacity or self.t("checking_capacity")) if mounted else self.t("unknown_capacity")
+        font_family = FONT_FAMILY_ZH if self.lang == "zh" else FONT_FAMILY_EN
+        Label(mid, text=f"{drive}  {server.get('name') or server.get('id')}", bg=row_bg, fg=fg, font=(font_family, 13, "bold")).pack(anchor="w")
+        Label(mid, text=capacity_label, bg=row_bg, fg="#c8c8c8", font=(font_family, 10)).pack(anchor="w")
+        Label(mid, text=f"{server.get('user', '')}@{server.get('host', '')}", bg=row_bg, fg=muted, font=(font_family, 10)).pack(anchor="e", fill=X)
+        Label(mid, text=server.get("remote_path") or "~", bg=row_bg, fg=muted, font=(font_family, 10)).pack(anchor="e", fill=X)
 
         actions = Frame(row, bg=row_bg)
         actions.pack(side=RIGHT)
-        self.icon_button(actions, "■" if mounted else "▶", "Unmount" if mounted else "Mount", lambda s=server: self.toggle_mount(s)).pack(side=LEFT, padx=4)
-        self.icon_button(actions, "📂", "Open mounted folder", lambda s=server: self.open_folder(s), enabled=mounted).pack(side=LEFT, padx=4)
-        self.icon_button(actions, "✎", "Edit mount information", lambda s=server: self.edit_server(s)).pack(side=LEFT, padx=4)
-        self.icon_button(actions, "🗑", "Delete this config", lambda s=server: self.delete_server(s), enabled=not mounted).pack(side=LEFT, padx=4)
+        self.icon_button(actions, "■" if mounted else "▶", self.t("unmount") if mounted else self.t("mount"), lambda s=server: self.toggle_mount(s)).pack(side=LEFT, padx=4)
+        self.icon_button(actions, "📂", self.t("open_folder"), lambda s=server: self.open_folder(s), enabled=mounted).pack(side=LEFT, padx=4)
+        self.icon_button(actions, "✎", self.t("edit_mount"), lambda s=server: self.edit_server(s)).pack(side=LEFT, padx=4)
+        self.icon_button(actions, "🗑", self.t("delete_config"), lambda s=server: self.delete_server(s), enabled=not mounted).pack(side=LEFT, padx=4)
 
     def icon_button(self, parent, text: str, tooltip: str, command, *, enabled: bool = True):
         button = Button(parent, text=text, width=3, height=1, command=command, font=("Segoe UI Emoji", 14))
@@ -883,7 +1105,7 @@ class App:
         if self.dependency_checking:
             return
         self.dependency_checking = True
-        self.dep_status.set("Checking dependencies...")
+        self.dep_status.set(self.t("checking_deps"))
         threading.Thread(target=self.check_dependencies, daemon=True).start()
 
     def check_dependencies(self) -> None:
@@ -903,26 +1125,33 @@ class App:
     def apply_dependency_result(self, rclone_path: str, rclone_ok: bool, winfsp_ok: bool, ssh_ok: bool, missing: list[str]) -> None:
         self.dependency_checking = False
         self.rclone = rclone_path
-        self.dep_status.set(f"rclone: {'ok' if rclone_ok else 'missing'}    WinFsp: {'ok' if winfsp_ok else 'missing'}    ssh: {'ok' if ssh_ok else 'missing'}")
+        self.dep_status.set(
+            self.t(
+                "deps_status",
+                rclone=self.t("ok") if rclone_ok else self.t("missing"),
+                winfsp=self.t("ok") if winfsp_ok else self.t("missing"),
+                ssh=self.t("ok") if ssh_ok else self.t("missing"),
+            )
+        )
         if missing and not self.prompted_deps:
             self.prompted_deps = True
             self.prompt_install_deps(missing)
 
     def prompt_install_deps(self, missing: list[str]) -> None:
-        if messagebox.askyesno(APP_TITLE, "Missing dependencies: " + ", ".join(missing) + ". Install now?"):
+        if messagebox.askyesno(APP_TITLE, self.t("missing_dependencies", items=", ".join(missing))):
             self.install_deps_async()
 
     def open_settings(self) -> None:
         self.check_dependencies_async()
         settings = load_settings()
         window = Toplevel(self.root)
-        window.title("Settings")
+        window.title(self.t("settings"))
         window.geometry("520x430")
         frame = Frame(window, padx=14, pady=14)
         frame.pack(fill=BOTH, expand=True)
         Label(frame, textvariable=self.dep_status, anchor="w", justify=LEFT).pack(fill=X, pady=(0, 12))
-        Button(frame, text="Check dependencies", command=self.check_dependencies_async).pack(fill=X, pady=3)
-        Button(frame, text="Install missing dependencies", command=self.install_deps_async).pack(fill=X, pady=3)
+        Button(frame, text=self.t("check_dependencies"), command=self.check_dependencies_async).pack(fill=X, pady=3)
+        Button(frame, text=self.t("install_missing_dependencies"), command=self.install_deps_async).pack(fill=X, pady=3)
 
         ttk.Separator(frame).pack(fill=X, pady=12)
 
@@ -931,29 +1160,35 @@ class App:
         cache_max_size = StringVar(value=setting_to_choice(settings.get("vfs_cache_max_size", ""), CACHE_SIZE_CHOICES[0]))
         cache_max_age = StringVar(value=setting_to_choice(settings.get("vfs_cache_max_age", ""), CACHE_AGE_CHOICES[0]))
         startup_all = BooleanVar(value=bool(settings.get("startup_all", False)))
+        language = StringVar(value=language_choice_from_setting(settings.get("language", "auto")))
+
+        lang_row = Frame(frame)
+        lang_row.pack(fill=X, pady=3)
+        Label(lang_row, text=self.t("language"), width=16, anchor="w").pack(side=LEFT)
+        ttk.Combobox(lang_row, values=list(LANGUAGE_CHOICES.values()), textvariable=language, state="readonly").pack(side=LEFT, fill=X, expand=True)
 
         cache_row = Frame(frame)
         cache_row.pack(fill=X, pady=3)
-        Label(cache_row, text="Cache root", width=16, anchor="w").pack(side=LEFT)
+        Label(cache_row, text=self.t("cache_root"), width=16, anchor="w").pack(side=LEFT)
         Entry(cache_row, textvariable=cache_root).pack(side=LEFT, fill=X, expand=True)
         Button(cache_row, text="...", command=lambda: self.pick_cache_root(cache_root)).pack(side=RIGHT)
 
         mode_row = Frame(frame)
         mode_row.pack(fill=X, pady=3)
-        Label(mode_row, text="VFS cache mode", width=16, anchor="w").pack(side=LEFT)
+        Label(mode_row, text=self.t("vfs_cache_mode"), width=16, anchor="w").pack(side=LEFT)
         ttk.Combobox(mode_row, values=["off", "minimal", "writes", "full"], textvariable=cache_mode, state="readonly").pack(side=LEFT, fill=X, expand=True)
 
         size_row = Frame(frame)
         size_row.pack(fill=X, pady=3)
-        Label(size_row, text="Max cache size", width=16, anchor="w").pack(side=LEFT)
+        Label(size_row, text=self.t("max_cache_size"), width=16, anchor="w").pack(side=LEFT)
         ttk.Combobox(size_row, values=CACHE_SIZE_CHOICES, textvariable=cache_max_size, state="readonly").pack(side=LEFT, fill=X, expand=True)
 
         age_row = Frame(frame)
         age_row.pack(fill=X, pady=3)
-        Label(age_row, text="Max cache age", width=16, anchor="w").pack(side=LEFT)
+        Label(age_row, text=self.t("max_cache_age"), width=16, anchor="w").pack(side=LEFT)
         ttk.Combobox(age_row, values=CACHE_AGE_CHOICES, textvariable=cache_max_age, state="readonly").pack(side=LEFT, fill=X, expand=True)
 
-        Checkbutton(frame, text="Mount all configs on Windows login", variable=startup_all).pack(anchor="w", pady=8)
+        Checkbutton(frame, text=self.t("startup_all"), variable=startup_all).pack(anchor="w", pady=8)
 
         def save() -> None:
             new_settings = load_settings()
@@ -964,14 +1199,21 @@ class App:
                     "vfs_cache_max_size": choice_to_setting(cache_max_size.get().strip()),
                     "vfs_cache_max_age": choice_to_setting(cache_max_age.get().strip()),
                     "startup_all": bool(startup_all.get()),
+                    "language": language_setting_from_choice(language.get()),
                 }
             )
             save_settings(new_settings)
+            old_lang = self.lang
+            self.settings = new_settings
+            self.lang = effective_language(new_settings)
+            if self.lang != old_lang:
+                configure_default_fonts(self.root, self.lang)
+                self.rebuild()
             self.apply_startup_setting(new_settings["startup_all"])
-            self.status.set("Settings saved.")
+            self.status.set(self.t("settings_saved"))
             window.destroy()
 
-        Button(frame, text="Save settings", command=save).pack(fill=X, pady=(12, 0))
+        Button(frame, text=self.t("save_settings"), command=save).pack(fill=X, pady=(12, 0))
 
     def pick_cache_root(self, variable: StringVar) -> None:
         path = filedialog.askdirectory(initialdir=variable.get() or str(Path.home()))
@@ -995,7 +1237,7 @@ class App:
 
     def install_deps(self) -> None:
         try:
-            self.root.after(0, lambda: self.status.set("Installing missing dependencies..."))
+            self.root.after(0, lambda: self.status.set(self.t("installing_deps")))
             if not resolve_rclone_path():
                 install_rclone()
             if os.name == "nt" and not winfsp_installed():
@@ -1010,15 +1252,15 @@ class App:
 
     def on_dependency_install_done(self, rclone_path: str) -> None:
         self.rclone = rclone_path
-        self.status.set("Dependency check complete.")
+        self.status.set(self.t("deps_complete"))
         self.check_dependencies_async()
 
     def on_dependency_install_failed(self, message: str) -> None:
-        self.status.set("Dependency installation failed.")
+        self.status.set(self.t("deps_failed"))
         messagebox.showerror(APP_TITLE, message)
 
     def add_config(self) -> None:
-        dialog = ServerDialog(self.root, rclone=self.current_rclone())
+        dialog = ServerDialog(self.root, rclone=self.current_rclone(), lang=self.lang)
         self.root.wait_window(dialog.window)
         if dialog.result:
             self.servers.append(dialog.result)
@@ -1036,7 +1278,7 @@ class App:
             index = self.servers.index(server)
         except ValueError:
             return
-        dialog = ServerDialog(self.root, rclone=self.current_rclone(), existing=server)
+        dialog = ServerDialog(self.root, rclone=self.current_rclone(), existing=server, lang=self.lang)
         self.root.wait_window(dialog.window)
         if dialog.result:
             self.servers[index] = dialog.result
@@ -1048,13 +1290,13 @@ class App:
         if mount_status(server) == "mounted":
             try:
                 unmount_server(server)
-                self.status.set("Unmounted.")
+                self.status.set(self.t("unmounted"))
             except Exception as exc:
                 messagebox.showerror(APP_TITLE, str(exc))
         else:
             try:
                 state = mount_server(server, self.current_rclone())
-                self.status.set(f"Mounted {state['remote']} at {state['mountpoint']}")
+                self.status.set(self.t("mounted_at", remote=state["remote"], mountpoint=state["mountpoint"]))
             except Exception as exc:
                 messagebox.showerror(APP_TITLE, str(exc))
         self.refresh_list()
@@ -1062,7 +1304,7 @@ class App:
 
     def open_folder(self, server: dict) -> None:
         if mount_status(server) != "mounted":
-            messagebox.showinfo(APP_TITLE, "Mount this config before opening its folder.")
+            messagebox.showinfo(APP_TITLE, self.t("mount_before_open"))
             return
         mountpoint = current_mountpoint(server)
         try:
@@ -1079,7 +1321,7 @@ class App:
         status = mount_status(server)
         name = server.get("name") or server.get("id")
         if status == "mounted":
-            if not messagebox.askyesno(APP_TITLE, f"{name} is mounted. Unmount and delete this config?"):
+            if not messagebox.askyesno(APP_TITLE, self.t("delete_mounted_confirm", name=name)):
                 return
             try:
                 unmount_server(server)
@@ -1087,14 +1329,14 @@ class App:
                 messagebox.showerror(APP_TITLE, str(exc))
                 return
         else:
-            if not messagebox.askyesno(APP_TITLE, f"Delete config {name}?"):
+            if not messagebox.askyesno(APP_TITLE, self.t("delete_confirm", name=name)):
                 return
         state_file = server_state_file(server)
         if state_file.exists() and mount_status(server) != "mounted":
             state_file.unlink(missing_ok=True)
         self.servers = [item for item in self.servers if item is not server and item.get("id") != server.get("id")]
         save_servers(self.servers)
-        self.status.set(f"Deleted {name}.")
+        self.status.set(self.t("deleted", name=name))
         self.refresh_list()
         self.refresh_mount_status_async()
 
@@ -1105,9 +1347,10 @@ class App:
 
 
 class ServerDialog:
-    def __init__(self, root: Tk, *, rclone: str, existing: dict | None = None):
+    def __init__(self, root: Tk, *, rclone: str, lang: str, existing: dict | None = None):
         self.result = None
         self.rclone = rclone
+        self.lang = lang
         self.existing = existing or {}
         existing_source = self.existing.get("source")
         if not existing_source and self.existing.get("mode") == "ssh_config":
@@ -1116,7 +1359,7 @@ class ServerDialog:
         self.auth = StringVar(value=self.existing.get("auth", "key"))
         self.values: dict[str, Entry] = {}
         self.window = Toplevel(root)
-        self.window.title("Edit config" if existing else "Add config")
+        self.window.title(self.t("edit_config_title") if existing else self.t("add_config_title"))
         self.window.geometry("500x520")
         self.window.minsize(460, 360)
         self.window.resizable(True, True)
@@ -1142,6 +1385,9 @@ class ServerDialog:
         self.window.bind_all("<Button-4>", self.on_mousewheel)
         self.window.bind_all("<Button-5>", self.on_mousewheel)
         self.window.bind("<Destroy>", self.on_destroy)
+
+    def t(self, key: str, **kwargs) -> str:
+        return tr_lang(self.lang, key, **kwargs)
 
     def row(self, label: str, key: str, default: str = "", browse=False, secret=False):
         frame = Frame(self.form, padx=10, pady=4)
@@ -1172,7 +1418,7 @@ class ServerDialog:
         base, suffix = split_remote_path(remote_path)
         frame = Frame(self.form, padx=10, pady=4)
         frame.pack(fill=X)
-        Label(frame, text="Remote path", width=14, anchor="w").pack(side=LEFT)
+        Label(frame, text=self.t("remote_path"), width=14, anchor="w").pack(side=LEFT)
         combo = ttk.Combobox(frame, values=["$HOME", "/"], width=8, state="readonly")
         combo.set(base)
         combo.pack(side=LEFT)
@@ -1185,36 +1431,36 @@ class ServerDialog:
     def build(self) -> None:
         source_frame = Frame(self.form, padx=10, pady=4)
         source_frame.pack(fill=X)
-        Label(source_frame, text="Source", width=14, anchor="w").pack(side=LEFT)
-        ttk.Radiobutton(source_frame, text="SSH config", variable=self.source, value="ssh_config", command=self.on_source_changed).pack(side=LEFT)
-        ttk.Radiobutton(source_frame, text="Manual", variable=self.source, value="manual", command=self.on_source_changed).pack(side=LEFT)
+        Label(source_frame, text=self.t("source"), width=14, anchor="w").pack(side=LEFT)
+        ttk.Radiobutton(source_frame, text=self.t("ssh_config"), variable=self.source, value="ssh_config", command=self.on_source_changed).pack(side=LEFT)
+        ttk.Radiobutton(source_frame, text=self.t("manual"), variable=self.source, value="manual", command=self.on_source_changed).pack(side=LEFT)
 
         hosts = list_ssh_config_hosts()
         host_default = self.existing.get("host_alias") or (hosts[0] if hosts else "")
-        self.host_combo = self.row_combo("SSH Host", "host_alias", hosts, host_default)
+        self.host_combo = self.row_combo(self.t("ssh_host"), "host_alias", hosts, host_default)
         self.host_combo.bind("<<ComboboxSelected>>", self.on_ssh_host_selected)
 
-        self.row("Name", "name", self.existing.get("name", ""))
-        self.row("IP / Host", "host", self.existing.get("host", ""))
-        self.row("User", "user", self.existing.get("user", ""))
-        self.row("Port", "port", str(self.existing.get("port") or "22"))
+        self.row(self.t("name"), "name", self.existing.get("name", ""))
+        self.row(self.t("ip_host"), "host", self.existing.get("host", ""))
+        self.row(self.t("user"), "user", self.existing.get("user", ""))
+        self.row(self.t("port"), "port", str(self.existing.get("port") or "22"))
 
         auth_frame = Frame(self.form, padx=10, pady=4)
         auth_frame.pack(fill=X)
-        Label(auth_frame, text="Auth", width=14, anchor="w").pack(side=LEFT)
-        ttk.Radiobutton(auth_frame, text="Key", variable=self.auth, value="key").pack(side=LEFT)
-        ttk.Radiobutton(auth_frame, text="Password", variable=self.auth, value="password").pack(side=LEFT)
-        self.row("Key file", "key_file", self.existing.get("key_file", ""), browse=True)
-        self.row("Key passphrase", "key_passphrase", secret=True)
-        self.row("Password", "password", secret=True)
+        Label(auth_frame, text=self.t("auth"), width=14, anchor="w").pack(side=LEFT)
+        ttk.Radiobutton(auth_frame, text=self.t("key"), variable=self.auth, value="key").pack(side=LEFT)
+        ttk.Radiobutton(auth_frame, text=self.t("password_auth"), variable=self.auth, value="password").pack(side=LEFT)
+        self.row(self.t("key_file"), "key_file", self.existing.get("key_file", ""), browse=True)
+        self.row(self.t("key_passphrase"), "key_passphrase", secret=True)
+        self.row(self.t("password"), "password", secret=True)
 
         self.row_remote_path(self.existing.get("remote_path", ""))
-        self.row_combo("Mountpoint", "mountpoint", mountpoint_choices(), self.existing.get("mountpoint") or "Auto")
+        self.row_combo(self.t("mountpoint"), "mountpoint", mountpoint_choices(), self.existing.get("mountpoint") or "Auto")
 
         buttons = Frame(self.form, padx=10, pady=10)
         buttons.pack(fill=X)
-        Button(buttons, text="Save", command=self.save).pack(side=RIGHT)
-        Button(buttons, text="Cancel", command=self.window.destroy).pack(side=RIGHT, padx=6)
+        Button(buttons, text=self.t("save"), command=self.save).pack(side=RIGHT)
+        Button(buttons, text=self.t("cancel"), command=self.window.destroy).pack(side=RIGHT, padx=6)
 
         self.update_source_controls()
         if self.source.get() == "ssh_config" and not self.existing and host_default:
@@ -1286,12 +1532,12 @@ class ServerDialog:
         source = self.source.get()
         name = self.get("name") or self.get("host_alias") or self.get("host")
         if not name:
-            messagebox.showerror(APP_TITLE, "Name is required.")
+            messagebox.showerror(APP_TITLE, self.t("name_required"))
             return
         host = self.get("host")
         user = self.get("user")
         if not host or not user:
-            messagebox.showerror(APP_TITLE, "IP/Host and user are required.")
+            messagebox.showerror(APP_TITLE, self.t("host_user_required"))
             return
 
         server_id = self.existing.get("id") or "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)
@@ -1320,7 +1566,7 @@ class ServerDialog:
             if not password and self.existing.get("password_obscured"):
                 result["password_obscured"] = self.existing["password_obscured"]
             elif not password:
-                messagebox.showerror(APP_TITLE, "Password is required.")
+                messagebox.showerror(APP_TITLE, self.t("password_required"))
                 return
             else:
                 try:

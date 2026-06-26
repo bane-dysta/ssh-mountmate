@@ -170,49 +170,11 @@ rsshmount.cmd mount gpu01 /home/ubuntu
 ~/mnt/<Host>
 ```
 
-## Linux 安装到用户目录
-
-```bash
-./install.sh
-~/.local/bin/rsshmount doctor
-```
-
-也可以指定安装前缀：
-
-```bash
-./install.sh /opt/rsshmount
-```
-
 ## Windows 安装到用户目录
 
 ```powershell
 .\app\install.ps1
 %LOCALAPPDATA%\rsshmount\rsshmount.cmd doctor
-```
-
-## 打包 Linux
-
-在项目根目录执行：
-
-```bash
-./scripts/package-linux-amd64.sh
-```
-
-脚本会下载官方 Linux amd64 rclone，并生成：
-
-```text
-dist/rsshmount-linux-amd64.tar.gz
-```
-
-发布包结构：
-
-```text
-rsshmount-linux-amd64/
-  rsshmount
-  install.sh
-  README.md
-  bin/
-    rclone
 ```
 
 ## 打包 Windows

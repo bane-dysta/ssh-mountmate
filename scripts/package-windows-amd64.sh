@@ -20,6 +20,7 @@ cp "$ROOT/app/rsshmount_gui.pyw" "$DIST/app/rsshmount_gui.pyw"
 cp "$ROOT/app/rsshmount.cmd" "$DIST/app/rsshmount.cmd"
 cp "$ROOT/app/rsshmount-gui.cmd" "$DIST/app/rsshmount-gui.cmd"
 cp "$ROOT/app/install.ps1" "$DIST/app/install.ps1"
+cp -R "$ROOT/app/assets" "$DIST/app/assets"
 
 python3 - "$ROOT/dist/$NAME.zip" "$DIST" "$NAME" <<'PY'
 import os
