@@ -185,6 +185,22 @@ def capacity_text(server: dict) -> str:
     return f"{free:.1f} GiB free / {total:.1f} GiB"
 
 
+def split_remote_path(remote_path: str) -> tuple[str, str]:
+    path = (remote_path or "").strip()
+    if not path or path == "~":
+        return "$HOME", ""
+    if path.startswith("/"):
+        return "/", path[1:]
+    return "$HOME", path
+
+
+def compose_remote_path(base: str, suffix: str) -> str:
+    suffix = (suffix or "").strip().replace("\\", "/").strip("/")
+    if base == "/":
+        return "/" + suffix if suffix else "/"
+    return suffix
+
+
 def mountpoint_choices() -> list[str]:
     if os.name != "nt":
         return ["Auto"]
@@ -468,6 +484,7 @@ class App:
         self.status = StringVar(value="Ready")
         self.dep_status = StringVar(value="")
         self.tray_icon = None
+        self.prompted_deps = False
 
         self.build()
         self.setup_tray()
@@ -478,11 +495,10 @@ class App:
     def build(self) -> None:
         top = Frame(self.root, padx=10, pady=8)
         top.pack(fill=X)
-        Label(top, textvariable=self.dep_status).pack(side=LEFT)
+        Label(top, text="ssh-mountmate").pack(side=LEFT)
+        Button(top, text="Settings", command=self.open_settings).pack(side=RIGHT, padx=6)
         Button(top, text="Add config", command=self.add_config).pack(side=RIGHT, padx=6)
         Button(top, text="Refresh", command=self.refresh_list).pack(side=RIGHT)
-        Button(top, text="Check", command=self.check_dependencies_async).pack(side=RIGHT)
-        Button(top, text="Install deps", command=self.install_deps_async).pack(side=RIGHT, padx=6)
 
         body = Frame(self.root, padx=10, pady=4)
         body.pack(fill=BOTH, expand=True)
@@ -569,23 +585,54 @@ class App:
         actions = Frame(row, bg=row_bg)
         actions.pack(side=RIGHT)
         self.icon_button(actions, "■" if mounted else "▶", "Unmount" if mounted else "Mount", lambda s=server: self.toggle_mount(s)).pack(side=LEFT, padx=4)
-        self.icon_button(actions, "📂", "Open mounted folder", lambda s=server: self.open_folder(s)).pack(side=LEFT, padx=4)
-        self.icon_button(actions, "⚙", "Edit mount information", lambda s=server: self.edit_server(s)).pack(side=LEFT, padx=4)
-        self.icon_button(actions, "🗑", "Delete this config", lambda s=server: self.delete_server(s)).pack(side=LEFT, padx=4)
+        self.icon_button(actions, "📂", "Open mounted folder", lambda s=server: self.open_folder(s), enabled=mounted).pack(side=LEFT, padx=4)
+        self.icon_button(actions, "✎", "Edit mount information", lambda s=server: self.edit_server(s)).pack(side=LEFT, padx=4)
+        self.icon_button(actions, "🗑", "Delete this config", lambda s=server: self.delete_server(s), enabled=not mounted).pack(side=LEFT, padx=4)
 
-    def icon_button(self, parent, text: str, tooltip: str, command):
+    def icon_button(self, parent, text: str, tooltip: str, command, *, enabled: bool = True):
         button = Button(parent, text=text, width=3, height=1, command=command, font=("Segoe UI Emoji", 14))
+        if not enabled:
+            button.configure(fg="#777777", command=lambda: None)
         Tooltip(button, tooltip)
         return button
 
     def check_dependencies_async(self) -> None:
         threading.Thread(target=self.check_dependencies, daemon=True).start()
 
+    def missing_dependencies(self) -> list[str]:
+        missing = []
+        if not resolve_rclone_path():
+            missing.append("rclone")
+        if os.name == "nt" and not winfsp_installed():
+            missing.append("WinFsp")
+        if not ssh_installed():
+            missing.append("OpenSSH")
+        return missing
+
     def check_dependencies(self) -> None:
         rclone_ok = bool(resolve_rclone_path())
         winfsp_ok = winfsp_installed() if os.name == "nt" else True
         ssh_ok = ssh_installed()
         self.dep_status.set(f"rclone: {'ok' if rclone_ok else 'missing'}    WinFsp: {'ok' if winfsp_ok else 'missing'}    ssh: {'ok' if ssh_ok else 'missing'}")
+        missing = self.missing_dependencies()
+        if missing and not self.prompted_deps:
+            self.prompted_deps = True
+            self.root.after(0, lambda: self.prompt_install_deps(missing))
+
+    def prompt_install_deps(self, missing: list[str]) -> None:
+        if messagebox.askyesno(APP_TITLE, "Missing dependencies: " + ", ".join(missing) + ". Install now?"):
+            self.install_deps_async()
+
+    def open_settings(self) -> None:
+        self.check_dependencies()
+        window = Toplevel(self.root)
+        window.title("Settings")
+        window.geometry("430x180")
+        frame = Frame(window, padx=14, pady=14)
+        frame.pack(fill=BOTH, expand=True)
+        Label(frame, textvariable=self.dep_status, anchor="w", justify=LEFT).pack(fill=X, pady=(0, 12))
+        Button(frame, text="Check dependencies", command=self.check_dependencies_async).pack(fill=X, pady=3)
+        Button(frame, text="Install missing dependencies", command=self.install_deps_async).pack(fill=X, pady=3)
 
     def install_deps_async(self) -> None:
         threading.Thread(target=self.install_deps, daemon=True).start()
@@ -778,6 +825,10 @@ class ServerDialog:
         self.form.bind("<Button-4>", self.on_mousewheel)
         self.form.bind("<Button-5>", self.on_mousewheel)
         self.build()
+        self.window.bind_all("<MouseWheel>", self.on_mousewheel)
+        self.window.bind_all("<Button-4>", self.on_mousewheel)
+        self.window.bind_all("<Button-5>", self.on_mousewheel)
+        self.window.bind("<Destroy>", self.on_destroy)
 
     def row(self, label: str, key: str, default: str = "", browse=False, secret=False):
         frame = Frame(self.form, padx=10, pady=4)
@@ -803,6 +854,20 @@ class ServerDialog:
         combo.pack(side=LEFT, fill=X, expand=True)
         self.values[key] = combo
         return combo
+
+    def row_remote_path(self, remote_path: str) -> None:
+        base, suffix = split_remote_path(remote_path)
+        frame = Frame(self.form, padx=10, pady=4)
+        frame.pack(fill=X)
+        Label(frame, text="Remote path", width=14, anchor="w").pack(side=LEFT)
+        combo = ttk.Combobox(frame, values=["$HOME", "/"], width=8, state="readonly")
+        combo.set(base)
+        combo.pack(side=LEFT)
+        self.values["remote_base"] = combo
+        entry = Entry(frame)
+        entry.insert(0, suffix)
+        entry.pack(side=LEFT, fill=X, expand=True, padx=(6, 0))
+        self.values["remote_suffix"] = entry
 
     def build(self) -> None:
         source_frame = Frame(self.form, padx=10, pady=4)
@@ -830,7 +895,7 @@ class ServerDialog:
         self.row("Key passphrase", "key_passphrase", secret=True)
         self.row("Password", "password", secret=True)
 
-        self.row("Remote path", "remote_path", self.existing.get("remote_path", ""))
+        self.row_remote_path(self.existing.get("remote_path", ""))
         self.row_combo("Mountpoint", "mountpoint", mountpoint_choices(), self.existing.get("mountpoint") or "Auto")
 
         buttons = Frame(self.form, padx=10, pady=10)
@@ -859,6 +924,12 @@ class ServerDialog:
         widget.bind("<Button-5>", self.on_mousewheel)
         for child in widget.winfo_children():
             self.bind_mousewheel_recursive(child)
+
+    def on_destroy(self, event) -> None:
+        if event.widget is self.window:
+            self.window.unbind_all("<MouseWheel>")
+            self.window.unbind_all("<Button-4>")
+            self.window.unbind_all("<Button-5>")
 
     def pick_file(self, key: str) -> None:
         path = filedialog.askopenfilename()
@@ -926,7 +997,7 @@ class ServerDialog:
             "port": self.get("port") or "22",
             "auth": self.auth.get(),
             "key_file": self.get("key_file"),
-            "remote_path": self.get("remote_path"),
+            "remote_path": compose_remote_path(self.get("remote_base"), self.get("remote_suffix")),
             "mountpoint": mountpoint,
             "cache_mode": "writes",
         }
