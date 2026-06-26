@@ -322,6 +322,18 @@ def run_visible_winget_install(title: str, package_id: str) -> tuple[int, Path]:
     script = app_dir() / f"install-{package_id.replace('.', '-')}.cmd"
     ps_script = app_dir() / f"install-{package_id.replace('.', '-')}.ps1"
     log_path = app_dir() / f"install-{package_id.replace('.', '-')}.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "==== SSH MountMate installer launcher ====",
+                f"Package: {package_id}",
+                f"Batch script: {script}",
+                f"PowerShell script: {ps_script}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     ps_script.write_text(
         "\n".join(
             [
@@ -363,7 +375,7 @@ def run_visible_winget_install(title: str, package_id: str) -> tuple[int, Path]:
             [
                 "@echo off",
                 f"title SSH MountMate - {title}",
-                f'> "{log_path}" echo ==== SSH MountMate installer wrapper ====',
+                f'>> "{log_path}" echo ==== SSH MountMate installer wrapper ====',
                 f'>> "{log_path}" echo Started: %DATE% %TIME%',
                 f'>> "{log_path}" echo Package: {package_id}',
                 f'>> "{log_path}" echo PowerShell script: "{ps_script}"',
@@ -379,22 +391,18 @@ def run_visible_winget_install(title: str, package_id: str) -> tuple[int, Path]:
                 "  echo.",
                 "  echo Installation command completed. This window will close in 5 seconds...",
                 f'  timeout /t 5 /nobreak >> "{log_path}"',
-                "  exit /b 0",
+                "  exit 0",
                 ")",
-                'if not "%RC%"=="0" (',
-                "  echo.",
-                "  echo Installation failed or could not start. Exit code: %RC%",
-                f'  echo Log file: "{log_path}"',
-                "  echo This window will stay open so you can review the output.",
-                "  cmd /k",
-                ")",
-                "exit /b %RC%",
+                "echo.",
+                "echo Installation failed or could not start. Exit code: %RC%",
+                f'echo Log file: "{log_path}"',
+                "echo This command window is intentionally left open for troubleshooting.",
             ]
         ),
         encoding="utf-8",
     )
     result = subprocess.run(
-        ["cmd.exe", "/c", f'call "{script}"'],
+        ["cmd.exe", "/k", f'call "{script}"'],
         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
         check=False,
     )
