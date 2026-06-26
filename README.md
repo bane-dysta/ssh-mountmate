@@ -2,7 +2,9 @@
 
 A SSH/SFTP drive mounter powered by rclone and OpenSSH config.
 
-`ssh-mountmate` 是一个面向 Linux 服务器的 rclone 封装程序。用户只维护 SSH config，程序内部使用随包附带的 rclone，通过 SFTP 把远端目录挂载成本地文件系统。
+`ssh-mountmate` 是一个面向 Linux 服务器的 rclone 封装程序。用户只维护 SSH config，程序通过系统 rclone 完成 SFTP 挂载；缺少 rclone 时会引导使用 winget 安装。
+
+早期原型名是 `RSSHMount`，含义是 rclone + SSH mount；当前项目名和 GUI 显示名统一为 `SSH MountMate` / `ssh-mountmate`。
 
 ## 设计目标
 
@@ -70,7 +72,7 @@ ssh gpu01 true
 
 ## Windows 使用
 
-Windows 先安装 WinFsp，然后在解压后的发布包目录运行：
+解压后的发布包目录运行：
 
 ```bat
 rsshmount-gui.cmd
@@ -93,19 +95,7 @@ rsshmount.cmd --transport native mount gpu01 /home/ubuntu X:
 rsshmount.cmd --transport external mount gpu01 /home/ubuntu X:
 ```
 
-如果 `doctor` 提示找不到 WinFsp，先安装：
-
-```text
-https://winfsp.dev/rel/
-```
-
-也可以让脚本尝试自动安装 WinFsp：
-
-```powershell
-.\install-windows-deps.ps1
-```
-
-脚本会依次尝试 `winget`、Chocolatey、WinFsp GitHub Release。安装 WinFsp 需要管理员权限；Windows 可能弹出 UAC 确认。
+如果缺少 rclone 或 WinFsp，GUI 会提示并通过 `winget` 弹出命令行窗口安装。WinFsp 安装需要管理员权限；Windows 可能弹出 UAC 确认。
 
 ## Windows GUI
 
@@ -145,7 +135,7 @@ GUI 支持：
 生成路径：
 
 ```text
-dist\RSSHMount-win\RSSHMount\RSSHMount.exe
+dist\SSHMountMate-win\SSHMountMate\SSHMountMate.exe
 ```
 
 卸载：
@@ -229,7 +219,7 @@ rsshmount-linux-amd64/
 ./scripts/package-windows-amd64.sh
 ```
 
-脚本会下载官方 Windows amd64 rclone，并生成：
+脚本会生成：
 
 ```text
 dist/rsshmount-windows-amd64.zip
@@ -244,12 +234,9 @@ rsshmount-windows-amd64/
   rsshmount.cmd
   rsshmount-gui.cmd
   install.ps1
-  install-windows-deps.ps1
   scripts/
     build-windows-exe.ps1
   README.md
-  bin/
-    rclone.exe
 ```
 
 ## 自定义 SSH config

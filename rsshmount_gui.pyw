@@ -15,7 +15,9 @@ from tkinter import ttk
 import rsshmount
 
 
-APP_TITLE = "RSSHMount"
+APP_TITLE = "SSH MountMate"
+CACHE_SIZE_CHOICES = ["default (off)", "1G", "5G", "10G", "20G", "50G", "100G", "500G"]
+CACHE_AGE_CHOICES = ["default (1h0m0s)", "5m", "15m", "30m", "1h", "6h", "24h", "168h"]
 def app_dir() -> Path:
     return rsshmount.app_config_dir()
 
@@ -58,6 +60,14 @@ def configured_cache_dir(host: str) -> Path:
     settings = load_settings()
     root = settings.get("cache_root") or default_settings()["cache_root"]
     return Path(root).expanduser() / host
+
+
+def setting_to_choice(value: str, default_choice: str) -> str:
+    return value if value else default_choice
+
+
+def choice_to_setting(value: str) -> str:
+    return "" if value.startswith("default ") else value
 
 
 def bundled_dir() -> Path:
@@ -328,7 +338,7 @@ def run_visible_winget_install(title: str, package_id: str) -> None:
         ),
         encoding="utf-8",
     )
-    subprocess.run(["cmd.exe", "/c", f'start "RSSHMount {title}" /wait "{script}"'], check=True)
+    subprocess.run(["cmd.exe", "/c", f'start "SSH MountMate {title}" /wait "{script}"'], check=True)
 
 
 def install_rclone() -> None:
@@ -342,10 +352,6 @@ def install_rclone() -> None:
 def install_winfsp() -> None:
     if shutil.which("winget"):
         run_visible_winget_install("WinFsp", "WinFsp.WinFsp")
-        return
-    script = bundled_dir() / "install-windows-deps.ps1"
-    if script.exists():
-        run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", str(script)])
         return
     raise RuntimeError("WinFsp is missing and winget is not available.")
 
@@ -501,12 +507,12 @@ def startup_command(server_id: str) -> str:
 
 
 def enable_startup(server: dict) -> None:
-    task_name = f"RSSHMount-{server['id']}"
+    task_name = f"SSHMountMate-{server['id']}"
     run(["schtasks", "/Create", "/TN", task_name, "/SC", "ONLOGON", "/TR", startup_command(server["id"]), "/F"])
 
 
 def disable_startup(server: dict) -> None:
-    task_name = f"RSSHMount-{server['id']}"
+    task_name = f"SSHMountMate-{server['id']}"
     subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"], text=True, creationflags=create_no_window())
 
 
@@ -612,7 +618,7 @@ class App:
             pystray.MenuItem("Show", lambda _icon, _item: self.root.after(0, self.show_window)),
             pystray.MenuItem("Exit", lambda _icon, _item: self.root.after(0, self.exit_app)),
         )
-        self.tray_icon = pystray.Icon("RSSHMount", image, "RSSHMount", menu)
+        self.tray_icon = pystray.Icon("SSHMountMate", image, "SSH MountMate", menu)
         self.tray_icon.run_detached()
 
     def hide_to_tray(self) -> None:
@@ -744,8 +750,8 @@ class App:
 
         cache_root = StringVar(value=settings.get("cache_root", default_settings()["cache_root"]))
         cache_mode = StringVar(value=settings.get("vfs_cache_mode", "writes"))
-        cache_max_size = StringVar(value=settings.get("vfs_cache_max_size", ""))
-        cache_max_age = StringVar(value=settings.get("vfs_cache_max_age", ""))
+        cache_max_size = StringVar(value=setting_to_choice(settings.get("vfs_cache_max_size", ""), CACHE_SIZE_CHOICES[0]))
+        cache_max_age = StringVar(value=setting_to_choice(settings.get("vfs_cache_max_age", ""), CACHE_AGE_CHOICES[0]))
         startup_all = BooleanVar(value=bool(settings.get("startup_all", False)))
 
         cache_row = Frame(frame)
@@ -762,14 +768,12 @@ class App:
         size_row = Frame(frame)
         size_row.pack(fill=X, pady=3)
         Label(size_row, text="Max cache size", width=16, anchor="w").pack(side=LEFT)
-        Entry(size_row, textvariable=cache_max_size).pack(side=LEFT, fill=X, expand=True)
-        Label(size_row, text="default: off", fg="#666666").pack(side=RIGHT, padx=(8, 0))
+        ttk.Combobox(size_row, values=CACHE_SIZE_CHOICES, textvariable=cache_max_size, state="readonly").pack(side=LEFT, fill=X, expand=True)
 
         age_row = Frame(frame)
         age_row.pack(fill=X, pady=3)
         Label(age_row, text="Max cache age", width=16, anchor="w").pack(side=LEFT)
-        Entry(age_row, textvariable=cache_max_age).pack(side=LEFT, fill=X, expand=True)
-        Label(age_row, text="default: 1h0m0s", fg="#666666").pack(side=RIGHT, padx=(8, 0))
+        ttk.Combobox(age_row, values=CACHE_AGE_CHOICES, textvariable=cache_max_age, state="readonly").pack(side=LEFT, fill=X, expand=True)
 
         Checkbutton(frame, text="Mount all configs on Windows login", variable=startup_all).pack(anchor="w", pady=8)
 
@@ -779,8 +783,8 @@ class App:
                 {
                     "cache_root": cache_root.get().strip() or default_settings()["cache_root"],
                     "vfs_cache_mode": cache_mode.get() or "writes",
-                    "vfs_cache_max_size": cache_max_size.get().strip(),
-                    "vfs_cache_max_age": cache_max_age.get().strip(),
+                    "vfs_cache_max_size": choice_to_setting(cache_max_size.get().strip()),
+                    "vfs_cache_max_age": choice_to_setting(cache_max_age.get().strip()),
                     "startup_all": bool(startup_all.get()),
                 }
             )
