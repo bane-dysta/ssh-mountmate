@@ -80,12 +80,75 @@ def bundled_rclone_path() -> Path:
     return bundled_dir() / "bin" / ("rclone.exe" if os.name == "nt" else "rclone")
 
 
+def refresh_windows_path_env() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import winreg
+    except ImportError:
+        return
+
+    registry_paths: list[str] = []
+    keys = [
+        (winreg.HKEY_CURRENT_USER, r"Environment"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    ]
+    for root, subkey in keys:
+        try:
+            with winreg.OpenKey(root, subkey) as key:
+                value, value_type = winreg.QueryValueEx(key, "Path")
+        except OSError:
+            continue
+        if value_type == winreg.REG_EXPAND_SZ:
+            value = winreg.ExpandEnvironmentStrings(value)
+        registry_paths.extend(part for part in str(value).split(os.pathsep) if part)
+
+    current_paths = [part for part in os.environ.get("PATH", "").split(os.pathsep) if part]
+    merged: list[str] = []
+    seen: set[str] = set()
+    for part in current_paths + registry_paths:
+        key = part.casefold()
+        if key not in seen:
+            seen.add(key)
+            merged.append(part)
+    if merged:
+        os.environ["PATH"] = os.pathsep.join(merged)
+
+
+def known_rclone_paths() -> list[Path]:
+    if os.name != "nt":
+        return []
+    candidates: list[Path] = []
+    localappdata = os.environ.get("LOCALAPPDATA")
+    programfiles = os.environ.get("ProgramFiles")
+    programfiles_x86 = os.environ.get("ProgramFiles(x86)")
+
+    if localappdata:
+        local = Path(localappdata)
+        candidates.append(local / "Microsoft" / "WinGet" / "Links" / "rclone.exe")
+        packages = local / "Microsoft" / "WinGet" / "Packages"
+        if packages.exists():
+            try:
+                candidates.extend(packages.glob("Rclone.Rclone_*/**/rclone.exe"))
+            except OSError:
+                pass
+    for root in [programfiles, programfiles_x86]:
+        if root:
+            candidates.append(Path(root) / "rclone" / "rclone.exe")
+    return candidates
+
+
 def resolve_rclone_path() -> str:
     bundled = bundled_rclone_path()
     if bundled.exists():
         return str(bundled)
     found = shutil.which("rclone.exe" if os.name == "nt" else "rclone") or shutil.which("rclone")
-    return found or ""
+    if found:
+        return found
+    for candidate in known_rclone_paths():
+        if candidate.exists():
+            return str(candidate)
+    return ""
 
 
 def create_no_window() -> int:
@@ -415,6 +478,7 @@ def install_rclone() -> None:
     if os.name != "nt":
         raise RuntimeError("rclone is missing. Install rclone and retry.")
     code, log_path = run_visible_winget_install("rclone", "Rclone.Rclone")
+    refresh_windows_path_env()
     if resolve_rclone_path():
         return
     raise RuntimeError(f"rclone was not found after winget finished. winget exit code: {code}. Log: {log_path}")
@@ -426,6 +490,7 @@ def install_winfsp() -> None:
     if os.name != "nt":
         raise RuntimeError("WinFsp is only required on Windows.")
     code, log_path = run_visible_winget_install("WinFsp", "WinFsp.WinFsp")
+    refresh_windows_path_env()
     if winfsp_installed():
         return
     raise RuntimeError(f"WinFsp was not found after winget finished. winget exit code: {code}. Log: {log_path}")
