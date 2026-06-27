@@ -57,6 +57,7 @@ TEXT = {
         "delete_config": "Delete this config",
         "checking_capacity": "checking capacity",
         "unknown_capacity": "unknown capacity",
+        "capacity_used": "{used} / {total} used ({percent}%)",
         "mounted_status": "mounted",
         "stopped_status": "stopped",
         "stale_status": "stale",
@@ -123,6 +124,7 @@ TEXT = {
         "delete_config": "删除此配置",
         "checking_capacity": "正在检查容量",
         "unknown_capacity": "容量未知",
+        "capacity_used": "已用 {used} / {total}（{percent}%）",
         "mounted_status": "已挂载",
         "stopped_status": "未挂载",
         "stale_status": "状态过期",
@@ -514,17 +516,25 @@ def display_mountpoint(server: dict) -> str:
     return mountpoint if mountpoint else "Auto"
 
 
-def capacity_text(server: dict, status: str | None = None) -> str:
+def format_capacity_bytes(size: int) -> str:
+    units = [("TB", 1000**4), ("GB", 1000**3), ("MB", 1000**2), ("KB", 1000)]
+    for unit, factor in units:
+        if abs(size) >= factor:
+            return f"{size / factor:.1f} {unit}"
+    return f"{size} B"
+
+
+def capacity_info(server: dict, status: str | None = None) -> dict:
     if (status or mount_status(server)) != "mounted":
-        return "unknown capacity"
+        return {}
     mountpoint = current_mountpoint(server)
     try:
         usage = shutil.disk_usage(mountpoint)
     except OSError:
-        return "unknown capacity"
-    total = usage.total / (1024 ** 3)
-    free = usage.free / (1024 ** 3)
-    return f"{free:.1f} GiB free / {total:.1f} GiB"
+        return {}
+    used = max(usage.total - usage.free, 0)
+    percent = int(round((used / usage.total) * 100)) if usage.total else 0
+    return {"used": used, "total": usage.total, "percent": max(0, min(percent, 100))}
 
 
 def split_remote_path(remote_path: str) -> tuple[str, str]:
@@ -911,7 +921,7 @@ class App:
         self.status_refreshing = False
         self.dependency_checking = False
         self.mount_status_cache: dict[str, str] = {}
-        self.capacity_cache: dict[str, str] = {}
+        self.capacity_cache: dict[str, dict] = {}
 
         self.build()
         self.root.protocol("WM_DELETE_WINDOW", self.exit_app)
@@ -999,7 +1009,7 @@ class App:
         for server in self.servers:
             server_id = server.get("id", "")
             status = self.mount_status_cache.get(server_id, "checking")
-            capacity = self.capacity_cache.get(server_id, "")
+            capacity = self.capacity_cache.get(server_id, {})
             self.add_server_card(server, status, capacity)
         self.bind_cards_mousewheel_recursive(self.cards_frame)
 
@@ -1028,19 +1038,19 @@ class App:
         def worker() -> None:
             pid_set = running_pid_set() if os.name == "nt" else None
             statuses: dict[str, str] = {}
-            capacities: dict[str, str] = {}
+            capacities: dict[str, dict] = {}
             for server in servers:
                 server_id = server.get("id", "")
                 if not server_id:
                     continue
                 status = mount_status_with_pids(server, pid_set) if pid_set is not None else mount_status(server)
                 statuses[server_id] = status
-                capacities[server_id] = capacity_text(server, status)
+                capacities[server_id] = capacity_info(server, status)
             self.root.after(0, lambda: self.apply_mount_statuses(statuses, capacities))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def apply_mount_statuses(self, statuses: dict[str, str], capacities: dict[str, str]) -> None:
+    def apply_mount_statuses(self, statuses: dict[str, str], capacities: dict[str, dict]) -> None:
         self.status_refreshing = False
         self.mount_status_cache = statuses
         self.capacity_cache = capacities
@@ -1063,7 +1073,7 @@ class App:
         for child in widget.winfo_children():
             self.bind_cards_mousewheel_recursive(child)
 
-    def add_server_card(self, server: dict, status: str = "checking", capacity: str = "") -> None:
+    def add_server_card(self, server: dict, status: str = "checking", capacity: dict | None = None) -> None:
         mounted = status == "mounted"
         row_bg = "#2a2a2a" if mounted else "#242424"
         muted = "#7d7d7d"
@@ -1080,10 +1090,20 @@ class App:
         mid = Frame(row, bg=row_bg)
         mid.pack(side=LEFT, fill=BOTH, expand=True)
         drive = display_mountpoint(server)
-        capacity_label = (capacity or self.t("checking_capacity")) if mounted else self.t("unknown_capacity")
+        capacity = capacity or {}
+        if mounted and capacity:
+            capacity_label = self.t(
+                "capacity_used",
+                used=format_capacity_bytes(int(capacity["used"])),
+                total=format_capacity_bytes(int(capacity["total"])),
+                percent=int(capacity["percent"]),
+            )
+        else:
+            capacity_label = self.t("checking_capacity") if mounted else self.t("unknown_capacity")
         font_family = FONT_FAMILY_ZH if self.lang == "zh" else FONT_FAMILY_EN
         Label(mid, text=f"{drive}  {server.get('name') or server.get('id')}", bg=row_bg, fg=fg, font=(font_family, 13, "bold")).pack(anchor="w")
         Label(mid, text=capacity_label, bg=row_bg, fg="#c8c8c8", font=(font_family, 10)).pack(anchor="w")
+        self.capacity_bar(mid, int(capacity.get("percent", 0)) if mounted and capacity else None, row_bg, muted).pack(fill=X, pady=(5, 4))
         Label(mid, text=f"{server.get('user', '')}@{server.get('host', '')}", bg=row_bg, fg=muted, font=(font_family, 10)).pack(anchor="e", fill=X)
         Label(mid, text=server.get("remote_path") or "~", bg=row_bg, fg=muted, font=(font_family, 10)).pack(anchor="e", fill=X)
 
@@ -1100,6 +1120,26 @@ class App:
             button.configure(fg="#777777", command=lambda: None)
         Tooltip(button, tooltip)
         return button
+
+    def capacity_bar(self, parent, percent: int | None, bg: str, muted: str) -> Canvas:
+        canvas = Canvas(parent, height=8, bg=bg, highlightthickness=0)
+
+        def redraw(event=None) -> None:
+            width = max(canvas.winfo_width(), 1)
+            height = 8
+            canvas.delete("all")
+            canvas.create_rectangle(0, 0, width, height, fill="#3a3a3a", outline="")
+            if percent is None:
+                canvas.create_rectangle(0, 0, width, height, fill="#303030", outline="")
+                return
+            fill_width = int(width * max(0, min(percent, 100)) / 100)
+            color = "#52b788" if percent < 80 else "#f0b429" if percent < 92 else "#e55353"
+            canvas.create_rectangle(0, 0, fill_width, height, fill=color, outline="")
+            canvas.create_line(0, height - 1, width, height - 1, fill=muted)
+
+        canvas.bind("<Configure>", redraw)
+        canvas.after_idle(redraw)
+        return canvas
 
     def check_dependencies_async(self) -> None:
         if self.dependency_checking:
