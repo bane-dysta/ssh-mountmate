@@ -811,7 +811,7 @@ def display_mountpoint_for_status(server: dict, status: str) -> str:
 
 
 def format_capacity_bytes(size: int) -> str:
-    units = [("TB", 1000**4), ("GB", 1000**3), ("MB", 1000**2), ("KB", 1000)]
+    units = [("TB", 1024**4), ("GB", 1024**3), ("MB", 1024**2), ("KB", 1024)]
     for unit, factor in units:
         if abs(size) >= factor:
             return f"{size / factor:.1f} {unit}"
