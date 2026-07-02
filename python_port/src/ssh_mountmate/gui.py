@@ -1098,7 +1098,7 @@ def write_manual_remote(server: dict, rclone: str) -> None:
     else:
         parser.set(remote, "key_use_agent", "true")
 
-    known_hosts = rsshmount.default_known_hosts_file()
+    known_hosts = rsshmount.update_app_known_hosts(server["host"], server.get("port") or "22") or rsshmount.default_known_hosts_file()
     if known_hosts.exists():
         parser.set(remote, "known_hosts_file", str(known_hosts))
 

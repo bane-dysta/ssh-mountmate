@@ -68,6 +68,91 @@ def default_known_hosts_file() -> Path:
     return Path.home() / ".ssh" / "known_hosts"
 
 
+def app_known_hosts_file() -> Path:
+    return app_config_dir() / "known_hosts"
+
+
+def known_hosts_marker(host: str, port: str | int) -> str:
+    port_value = str(port or "22")
+    return f"[{host}]:{port_value}" if port_value != "22" else host
+
+
+def known_hosts_line_matches(line: str, marker: str) -> bool:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return False
+    if stripped.startswith("@"):
+        parts = stripped.split(None, 2)
+        if len(parts) < 2:
+            return False
+        hosts = parts[1]
+    else:
+        hosts = stripped.split(None, 1)[0]
+    return marker in hosts.split(",")
+
+
+def scan_host_keys(host: str, port: str | int) -> list[str]:
+    keyscan = shutil.which("ssh-keyscan")
+    if not keyscan or not host:
+        return []
+    cmd = [
+        keyscan,
+        "-T",
+        "8",
+        "-p",
+        str(port or "22"),
+        "-t",
+        "rsa,ecdsa,ed25519",
+        host,
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if is_windows() else 0,
+            timeout=12,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) >= 3 and parts[1].startswith(("ssh-", "ecdsa-")) and line not in seen:
+            lines.append(line)
+            seen.add(line)
+    return lines
+
+
+def update_app_known_hosts(host: str, port: str | int) -> Path | None:
+    scanned = scan_host_keys(host, port)
+    if not scanned:
+        return None
+    path = app_known_hosts_file()
+    marker = known_hosts_marker(host, port)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    try:
+        existing = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        existing = []
+    kept = [line for line in existing if not known_hosts_line_matches(line, marker)]
+    try:
+        path.write_text("\n".join([*kept, *scanned, ""]), encoding="utf-8")
+        path.chmod(0o600)
+    except OSError:
+        return None
+    return path
+
+
 def winfsp_paths() -> list[Path]:
     if not is_windows():
         return []
@@ -280,7 +365,8 @@ def write_external_remote(parser, host: str, ssh_config: str | None) -> None:
     parser.set(host, "ssh", ssh_cmd_for_rclone(host, ssh_config))
     parser.set(host, "shell_type", "unix")
     parser.set(host, "disable_hashcheck", "true")
-    known_hosts = default_known_hosts_file()
+    port = first_ssh_value(read_ssh_config(host, ssh_config), "port", "22") if ssh_config else "22"
+    known_hosts = update_app_known_hosts(host, port) or default_known_hosts_file()
     if known_hosts.exists():
         parser.set(host, "known_hosts_file", str(known_hosts))
 
@@ -299,13 +385,17 @@ def write_native_remote(parser, host: str, config: dict[str, list[str]]) -> None
     else:
         parser.set(host, "key_use_agent", "true")
 
-    known_hosts = first_usable_path(config.get("userknownhostsfile", []), must_exist=True)
+    host_name = first_ssh_value(config, "hostname", host)
+    port = first_ssh_value(config, "port", "22")
+    known_hosts = update_app_known_hosts(host_name, port)
     if not known_hosts:
-        known_hosts_path = default_known_hosts_file()
-        if known_hosts_path.exists():
-            known_hosts = str(known_hosts_path)
+        known_hosts = first_usable_path(config.get("userknownhostsfile", []), must_exist=True)
+        if not known_hosts:
+            known_hosts_path = default_known_hosts_file()
+            if known_hosts_path.exists():
+                known_hosts = str(known_hosts_path)
     if known_hosts:
-        parser.set(host, "known_hosts_file", known_hosts)
+        parser.set(host, "known_hosts_file", str(known_hosts))
 
 
 def ensure_rclone_remote(host: str, ssh_config: str | None, transport: str) -> Path:
