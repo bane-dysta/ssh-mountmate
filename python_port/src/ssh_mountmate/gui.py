@@ -39,8 +39,6 @@ TEXT = {
         "no_configs": "No configs yet.",
         "settings": "Settings",
         "add_config": "Add config",
-        "mount_all": "Mount all",
-        "unmount_all": "Unmount all",
         "refresh": "Refresh",
         "checking_deps": "Checking dependencies...",
         "check_dependencies": "Check dependencies",
@@ -136,8 +134,6 @@ TEXT = {
         "no_configs": "暂无配置。",
         "settings": "设置",
         "add_config": "新增配置",
-        "mount_all": "全部挂载",
-        "unmount_all": "全部取消挂载",
         "refresh": "刷新",
         "checking_deps": "正在检查依赖...",
         "check_dependencies": "检查依赖",
@@ -540,12 +536,8 @@ def make_unique_server_id(base: str, used: set[str]) -> str:
             return candidate
 
 
-def uses_legacy_ssh_config_remote(server: dict) -> bool:
-    return server.get("mode") == "ssh_config" and not (server.get("host") and server.get("user"))
-
-
 def server_remote_name_for_state(server: dict) -> str:
-    return server.get("host_alias", "") if uses_legacy_ssh_config_remote(server) else server.get("id", "")
+    return server.get("host_alias", "") if server.get("mode") == "ssh_config" else server.get("id", "")
 
 
 def expected_remote_for_state(server: dict) -> str:
@@ -1115,7 +1107,7 @@ def write_manual_remote(server: dict, rclone: str) -> None:
 
 
 def ensure_remote(server: dict, rclone: str) -> None:
-    if uses_legacy_ssh_config_remote(server):
+    if server["mode"] == "ssh_config":
         rsshmount.ensure_rclone_remote(server["host_alias"], None, "auto")
     else:
         write_manual_remote(server, rclone)
@@ -1336,8 +1328,6 @@ class App:
         Label(top, text="ssh-mountmate").pack(side=LEFT)
         Button(top, text=self.t("settings"), command=self.open_settings).pack(side=RIGHT, padx=6)
         Button(top, text=self.t("add_config"), command=self.add_config).pack(side=RIGHT, padx=6)
-        Button(top, text=self.t("mount_all"), command=self.mount_all_visible).pack(side=RIGHT, padx=6)
-        Button(top, text=self.t("unmount_all"), command=self.unmount_all_visible).pack(side=RIGHT, padx=6)
         Button(top, text=self.t("refresh"), command=self.reload_configs_async).pack(side=RIGHT)
 
         body = Frame(self.root, padx=10, pady=4)
@@ -1884,34 +1874,6 @@ class App:
         except Exception as exc:
             self.show_error(str(exc))
 
-    def mount_all_visible(self) -> None:
-        errors: list[str] = []
-        for server in self.servers:
-            try:
-                if verified_mount_status(server) != "mounted":
-                    mount_server(server, self.current_rclone())
-            except Exception as exc:
-                errors.append(f"{server.get('name') or server.get('id')}: {exc}")
-            self.root.update_idletasks()
-        self.refresh_list()
-        self.refresh_mount_status_async()
-        if errors:
-            self.show_error("\n\n".join(errors))
-
-    def unmount_all_visible(self) -> None:
-        errors: list[str] = []
-        for server in self.servers:
-            try:
-                if verified_mount_status(server) == "mounted":
-                    unmount_server(server)
-            except Exception as exc:
-                errors.append(f"{server.get('name') or server.get('id')}: {exc}")
-            self.root.update_idletasks()
-        self.refresh_list()
-        self.refresh_mount_status_async()
-        if errors:
-            self.show_error("\n\n".join(errors))
-
     def add_config(self) -> None:
         dialog = ServerDialog(self.root, rclone=self.current_rclone(), lang=self.lang)
         self.root.wait_window(dialog.window)
@@ -2117,10 +2079,8 @@ class ServerDialog:
 
         buttons = Frame(self.form, padx=10, pady=10)
         buttons.pack(fill=X)
-        self.save_button = Button(buttons, text=self.t("save"), command=self.save)
-        self.save_button.pack(side=RIGHT)
-        self.cancel_button = Button(buttons, text=self.t("cancel"), command=self.window.destroy)
-        self.cancel_button.pack(side=RIGHT, padx=6)
+        Button(buttons, text=self.t("save"), command=self.save).pack(side=RIGHT)
+        Button(buttons, text=self.t("cancel"), command=self.window.destroy).pack(side=RIGHT, padx=6)
 
         self.update_source_controls()
         if self.source.get() == "ssh_config" and not self.existing and host_default:
