@@ -13,13 +13,15 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, Button, Canvas, Checkbutton, Entry, Frame, Label, Scrollbar, StringVar, Text, Tk, Toplevel, filedialog, messagebox
+from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, Button, Canvas, Checkbutton, Entry, Frame, Label, Listbox, Scrollbar, StringVar, Text, Tk, Toplevel, filedialog, messagebox
 from tkinter import font as tkfont
 from tkinter import ttk
 
 from . import VERSION
 from . import core as rsshmount
 from .rclone import augment_process_path, manual_install_text
+from .ssh_config_live import detail_text as live_detail_text
+from .ssh_config_live import live_servers
 
 
 APP_TITLE = "SSH MountMate"
@@ -39,6 +41,12 @@ TEXT = {
         "no_configs": "No configs yet.",
         "settings": "Settings",
         "add_config": "Add config",
+        "ssh_config_live": "SSH Config",
+        "mount_all": "Mount all",
+        "unmount_all": "Unmount all",
+        "live_config_title": "SSH Config Live",
+        "no_ssh_hosts": "No concrete Host entries found in SSH config.",
+        "resolved_config": "Resolved SSH config",
         "refresh": "Refresh",
         "checking_deps": "Checking dependencies...",
         "check_dependencies": "Check dependencies",
@@ -134,6 +142,12 @@ TEXT = {
         "no_configs": "暂无配置。",
         "settings": "设置",
         "add_config": "新增配置",
+        "ssh_config_live": "SSH 配置",
+        "mount_all": "全部挂载",
+        "unmount_all": "全部取消挂载",
+        "live_config_title": "SSH 配置直连",
+        "no_ssh_hosts": "SSH config 中没有找到具体 Host。",
+        "resolved_config": "SSH 解析结果",
         "refresh": "刷新",
         "checking_deps": "正在检查依赖...",
         "check_dependencies": "检查依赖",
@@ -1108,7 +1122,8 @@ def write_manual_remote(server: dict, rclone: str) -> None:
 
 def ensure_remote(server: dict, rclone: str) -> None:
     if server["mode"] == "ssh_config":
-        rsshmount.ensure_rclone_remote(server["host_alias"], None, "auto")
+        transport = "external" if server.get("source") == "ssh_config_live" else "auto"
+        rsshmount.ensure_rclone_remote(server["host_alias"], None, transport)
     else:
         write_manual_remote(server, rclone)
 
@@ -1328,6 +1343,7 @@ class App:
         Label(top, text="ssh-mountmate").pack(side=LEFT)
         Button(top, text=self.t("settings"), command=self.open_settings).pack(side=RIGHT, padx=6)
         Button(top, text=self.t("add_config"), command=self.add_config).pack(side=RIGHT, padx=6)
+        Button(top, text=self.t("ssh_config_live"), command=self.open_ssh_config_live).pack(side=RIGHT, padx=6)
         Button(top, text=self.t("refresh"), command=self.reload_configs_async).pack(side=RIGHT)
 
         body = Frame(self.root, padx=10, pady=4)
@@ -1827,6 +1843,143 @@ class App:
 
     def show_error(self, message: str) -> None:
         self.show_text_window(self.t("error_details"), message)
+
+    def open_ssh_config_live(self) -> None:
+        window = Toplevel(self.root)
+        window.title(self.t("live_config_title"))
+        window.geometry("820x520")
+
+        top = Frame(window, padx=10, pady=8)
+        top.pack(fill=X)
+        Button(top, text=self.t("refresh"), command=lambda: refresh_hosts()).pack(side=RIGHT, padx=4)
+        Button(top, text=self.t("mount_all"), command=lambda: mount_all()).pack(side=RIGHT, padx=4)
+        Button(top, text=self.t("unmount_all"), command=lambda: unmount_all()).pack(side=RIGHT, padx=4)
+
+        body = Frame(window, padx=10, pady=6)
+        body.pack(fill=BOTH, expand=True)
+        left = Frame(body)
+        left.pack(side=LEFT, fill=Y)
+        host_list = Listbox(left, width=38)
+        host_list.pack(side=LEFT, fill=Y)
+        list_scroll = Scrollbar(left, orient="vertical", command=host_list.yview)
+        list_scroll.pack(side=RIGHT, fill=Y)
+        host_list.configure(yscrollcommand=list_scroll.set)
+
+        right = Frame(body)
+        right.pack(side=LEFT, fill=BOTH, expand=True, padx=(10, 0))
+        Label(right, text=self.t("resolved_config"), anchor="w").pack(fill=X)
+        details = Text(right, wrap="word", height=18)
+        details.pack(fill=BOTH, expand=True)
+
+        bottom = Frame(window, padx=10, pady=8)
+        bottom.pack(fill=X)
+        Button(bottom, text=self.t("mount"), command=lambda: mount_selected()).pack(side=RIGHT, padx=4)
+        Button(bottom, text=self.t("unmount"), command=lambda: unmount_selected()).pack(side=RIGHT, padx=4)
+        Button(bottom, text=self.t("open_folder"), command=lambda: open_selected()).pack(side=RIGHT, padx=4)
+
+        servers: list[dict] = []
+
+        def selected_server() -> dict | None:
+            selection = host_list.curselection()
+            if not selection:
+                return None
+            index = int(selection[0])
+            if 0 <= index < len(servers):
+                return servers[index]
+            return None
+
+        def set_details(content: str) -> None:
+            details.configure(state="normal")
+            details.delete("1.0", END)
+            details.insert("1.0", content)
+            details.configure(state="disabled")
+
+        def render_hosts() -> None:
+            host_list.delete(0, END)
+            if not servers:
+                host_list.insert(END, self.t("no_ssh_hosts"))
+                set_details(self.t("no_ssh_hosts"))
+                return
+            for server in servers:
+                status = self.status_text(verified_mount_status(server))
+                host = server.get("host_alias") or server.get("name")
+                target = f"{server.get('user', '')}@{server.get('host', '')}:{server.get('port', '')}"
+                host_list.insert(END, f"{status}  {host}  {target}")
+            host_list.selection_clear(0, END)
+            host_list.selection_set(0)
+            show_selected()
+
+        def refresh_hosts() -> None:
+            nonlocal servers
+            try:
+                servers = live_servers()
+            except Exception as exc:
+                servers = []
+                set_details(str(exc))
+                return
+            render_hosts()
+
+        def show_selected(_event=None) -> None:
+            server = selected_server()
+            if not server:
+                return
+            set_details(live_detail_text(server))
+
+        def mount_selected() -> None:
+            server = selected_server()
+            if not server:
+                return
+            try:
+                if verified_mount_status(server) != "mounted":
+                    mount_server(server, self.current_rclone())
+            except Exception as exc:
+                self.show_error(str(exc))
+            render_hosts()
+
+        def unmount_selected() -> None:
+            server = selected_server()
+            if not server:
+                return
+            try:
+                if verified_mount_status(server) == "mounted":
+                    unmount_server(server)
+            except Exception as exc:
+                self.show_error(str(exc))
+            render_hosts()
+
+        def open_selected() -> None:
+            server = selected_server()
+            if server:
+                self.open_folder(server)
+
+        def mount_all() -> None:
+            errors: list[str] = []
+            for server in servers:
+                try:
+                    if verified_mount_status(server) != "mounted":
+                        mount_server(server, self.current_rclone())
+                except Exception as exc:
+                    errors.append(f"{server.get('host_alias') or server.get('name')}: {exc}")
+                window.update_idletasks()
+            render_hosts()
+            if errors:
+                self.show_error("\n\n".join(errors))
+
+        def unmount_all() -> None:
+            errors: list[str] = []
+            for server in servers:
+                try:
+                    if verified_mount_status(server) == "mounted":
+                        unmount_server(server)
+                except Exception as exc:
+                    errors.append(f"{server.get('host_alias') or server.get('name')}: {exc}")
+                window.update_idletasks()
+            render_hosts()
+            if errors:
+                self.show_error("\n\n".join(errors))
+
+        host_list.bind("<<ListboxSelect>>", show_selected)
+        refresh_hosts()
 
     def open_logs(self) -> None:
         if not self.servers:
