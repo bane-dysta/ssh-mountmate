@@ -1,223 +1,313 @@
-# ssh-mountmate
+# SSH MountMate
 
-A SSH/SFTP drive mounter powered by rclone and OpenSSH config.
+SSH MountMate is a cross-platform desktop app for mounting Linux servers as local drives or folders over SSH/SFTP.
 
-`ssh-mountmate` 是一个面向 Linux 服务器的 rclone 封装程序。用户只维护 SSH config，程序通过系统 rclone 完成 SFTP 挂载；缺少 rclone 时会引导使用 winget 安装。
+It uses rclone for the actual mount operation and provides a small GUI around the parts that are usually tedious: dependency checks, SSH config import, rclone remote generation, mount options, logs, and startup mounts.
 
-早期原型名是 `RSSHMount`，含义是 rclone + SSH mount；当前项目名和 GUI 显示名统一为 `SSH MountMate` / `ssh-mountmate`。
+## What It Does
 
-## 设计目标
+- Mount a Linux server directory on Windows, macOS, or Linux.
+- Import hosts from your existing OpenSSH config and use them as editable defaults.
+- Add connections manually with host, username, port, password, key file, and key passphrase.
+- Store passwords and key passphrases through `rclone obscure`, not as plain text.
+- Check for rclone and platform mount dependencies.
+- Help install rclone on Windows through winget.
+- Configure global rclone VFS cache options in the GUI.
+- Show mount status, capacity usage, logs, and common actions per connection.
+- Build single-file executables for Windows, macOS, and Linux with GitHub Actions.
 
-- 不要求用户手动配置 rclone。
-- 复用 OpenSSH config 中的 `Host`、`HostName`、`User`、`Port`、`IdentityFile`、`ProxyJump` 等配置。
-- rclone 配置写入私有文件 `~/.config/rsshmount/rclone.conf`，不污染用户已有 rclone。
-- 发布包内置 rclone，运行时不依赖系统安装 rclone。
-- 支持 Linux 和 Windows 客户端；服务器侧只按 Linux 服务器处理。
+## Requirements
 
-## Linux 客户端依赖
+SSH MountMate does not bundle rclone. Install rclone separately or let the app help you on Windows.
 
-- Linux
-- Python 3
-- OpenSSH client
-- FUSE：通常是 `fusermount3`
+Windows:
 
-## Windows 客户端依赖
+- Windows 10 or 11
+- rclone
+- WinFsp
+- OpenSSH Client
 
-- Windows 10/11
-- Python 3
-- Windows OpenSSH client
-- WinFsp：rclone mount 在 Windows 上需要它提供文件系统挂载能力
+macOS:
 
-## SSH 配置示例
+- rclone
+- macFUSE
+- OpenSSH Client
 
-```sshconfig
-Host gpu01
-  HostName 10.0.0.12
-  User ubuntu
-  Port 22
-  IdentityFile ~/.ssh/gpu01_ed25519
-  IdentitiesOnly yes
-  ServerAliveInterval 30
-  ServerAliveCountMax 3
-  ControlMaster auto
-  ControlPath ~/.ssh/cm-%r@%h:%p
-  ControlPersist 10m
-```
+Linux:
 
-先确认 SSH 可以免交互登录：
+- rclone
+- FUSE support, usually `fuse3`
+- OpenSSH Client
+
+The remote server is assumed to be a Linux server reachable over SSH/SFTP.
+
+## Download
+
+Use the latest GitHub Release and download the package for your platform:
+
+- `SSHMountMate-windows-x64.zip`
+- `SSHMountMate-macos-arm64-x64.zip`
+- `SSHMountMate-linux-x64.zip`
+
+Release builds are produced by GitHub Actions from the same Python source tree.
+
+## Quick Start
+
+1. Install the platform dependencies above.
+2. Confirm normal SSH login works:
+
+   ```bash
+   ssh your-host
+   ```
+
+3. Start `SSHMountMate`.
+4. Click `Add config`.
+5. Choose either:
+   - `SSH config`: select an existing `Host` entry and let the app fill defaults.
+   - `Manual`: enter host, username, port, and authentication details yourself.
+6. Pick a remote path. `$HOME` is the default base.
+7. Save, then click the mount button on the connection card.
+
+On Windows, `Auto` mountpoint picks an available drive letter. On macOS and Linux, the app uses a per-connection mount folder by default.
+
+## SSH Config Import
+
+SSH MountMate can read your OpenSSH config and list concrete `Host` entries. Selecting one fills:
+
+- name
+- host/IP
+- username
+- port
+- key file
+
+After import, the connection is saved as an editable rclone SFTP configuration. The mount behavior follows the values shown in the GUI, not a hidden live SSH command.
+
+## Passwords And Key Passphrases
+
+Passwords and key passphrases are passed through:
 
 ```bash
-ssh gpu01 true
+rclone obscure
 ```
 
-如果私钥有 passphrase，需要提前加入 `ssh-agent`。
+The obscured value is stored in SSH MountMate's private rclone config. This avoids plain-text storage, but it is not strong encryption. Treat the local user account and its config directory as sensitive.
 
-这一步也会把服务器主机指纹写入默认 `known_hosts`。`rsshmount` 会把这个文件自动写入私有 rclone 配置，避免 rclone 提示未做 host key validation。
+## Host Key Validation
 
-## Linux 使用
+SSH MountMate enables rclone host key validation when possible.
 
-在解压后的发布包目录中直接运行：
+For rclone SFTP remotes, the app maintains its own `known_hosts` file and refreshes entries with `ssh-keyscan` for the target host and port. This helps avoid cases where OpenSSH succeeds but rclone rejects the server because only one host key type was present in the user's `~/.ssh/known_hosts`.
+
+If host key scanning is unavailable, the app falls back to the user's default OpenSSH `known_hosts` file.
+
+## Settings
+
+The Settings window contains:
+
+- dependency checks
+- mount log access
+- language selection
+- Windows startup mount option
+- rclone VFS cache root
+- VFS cache mode
+- max cache size
+- max cache age
+- minimum free space
+- write-back delay
+- directory cache time
+- read buffer size
+
+Each option has a tooltip in the GUI.
+
+## Building From Source
+
+Install Python 3.10 or newer.
+
+Run from the repository root:
 
 ```bash
-./rsshmount doctor
-./rsshmount init gpu01
-./rsshmount mount gpu01 /home/ubuntu ~/mnt/gpu01
+python -m pip install -e ".[build]"
+python build/build_local.py
 ```
 
-卸载：
-
-```bash
-./rsshmount umount gpu01 ~/mnt/gpu01
-```
-
-## Windows 使用
-
-解压后的发布包目录运行：
-
-```bat
-启动 SSH MountMate.cmd
-```
-
-也可以继续使用命令行：
-
-```bat
-rsshmount.cmd doctor
-rsshmount.cmd init gpu01
-rsshmount.cmd mount gpu01 /home/ubuntu X:
-```
-
-Windows 默认会把 SSH config 解析成 rclone 原生 SFTP 配置，避免挂载期间弹出 `ssh.exe` 命令行窗口。普通的 `HostName`、`User`、`Port`、`IdentityFile` 会自动复用。
-
-如果 SSH config 使用了 `ProxyJump` 或 `ProxyCommand`，程序会回退到外部 `ssh.exe` 方式，因为这类跳板逻辑需要 OpenSSH 自己处理。此时 Windows 仍可能短暂出现 `ssh.exe` 窗口。可以显式选择模式：
-
-```bat
-rsshmount.cmd --transport native mount gpu01 /home/ubuntu X:
-rsshmount.cmd --transport external mount gpu01 /home/ubuntu X:
-```
-
-如果缺少 rclone 或 WinFsp，GUI 会提示并通过 `winget` 弹出命令行窗口安装。安装输出也会写入 `%APPDATA%\rsshmount\install-*.log`，便于排查。WinFsp 安装需要管理员权限；Windows 可能弹出 UAC 确认。
-
-## Windows GUI
-
-GUI 入口：
-
-```bat
-启动 SSH MountMate.cmd
-```
-
-GUI 支持：
-
-- 启动时检查 rclone、WinFsp、OpenSSH。
-- 自动安装缺失依赖。Windows 上缺 rclone 或 WinFsp 时优先用 `winget` 安装，并弹出命令行窗口显示进度，同时写入 `%APPDATA%\rsshmount\install-*.log`；安装成功后窗口保留 5 秒自动关闭，安装失败时窗口保留。
-- 通过一个入口添加配置：可选择从 SSH config 导入，或手动填写。
-- 从 SSH config 导入时会列出 `Host` 条目，选择后自动填充 Name、IP/Host、用户名、端口、密钥路径，并允许继续手动修改。
-- 手动添加服务器：IP/Host、用户名、端口、密钥或密码。
-- 管理配置并挂载/卸载，已导入配置可以继续编辑。
-- 挂载点支持 `Auto` 和可用盘符下拉选择。
-- 远端路径支持 `$HOME` 与 `/` 两种基准目录下拉选择，并可继续填写后续路径；默认是 `$HOME`。
-- 每个连接以卡片展示，包含挂载状态、盘符、名称、容量、账号/主机、远端路径。
-- 每个连接卡片提供 Mount/Unmount、Open、Edit、Delete 四个图标按钮；不可用动作会变灰。
-- 依赖检查和安装入口收纳在 Settings 中；启动时如果发现缺依赖，会主动询问是否安装。
-- Settings 支持全局缓存设置：cache root、VFS cache mode、max cache size、max cache age。
-- Settings 支持全局开机自启：登录 Windows 后挂载全部配置。
-- 为某个配置创建登录后自动挂载任务。
-- 关闭窗口会退出 GUI；已启动的 rclone 挂载进程继续在后台运行。
-
-密码不会明文写入 rclone 配置；保存时会通过 `rclone obscure` 转成 rclone 可识别的混淆值。
-密钥 passphrase 也按同样方式保存为混淆值，并写入 rclone 的 `key_file_pass`，避免每次挂载重复输入。
-
-正式交付物建议使用单文件 `.exe`。在 Windows 机器上执行：
-
-```powershell
-.\scripts\build-windows-exe.ps1
-```
-
-生成路径：
+The executable is written to:
 
 ```text
-dist\SSHMountMate.exe
+dist/
 ```
 
-GitHub Actions 也会在 Windows runner 上构建并上传 `SSHMountMate.exe` artifact。
+PyInstaller builds for the current operating system. Use GitHub Actions or native machines to build all three platforms.
 
-卸载：
+## Development
 
-```bat
-rsshmount.cmd umount gpu01
-```
-
-Windows 如果省略挂载点，程序会从 `Z:` 往前自动选择一个空闲盘符：
-
-```bat
-rsshmount.cmd mount gpu01 /home/ubuntu
-```
-
-同步本地目录到服务器：
+Run the GUI from source:
 
 ```bash
-./rsshmount sync ./work gpu01 /home/ubuntu/work
+python -m pip install -e .
+python -m ssh_mountmate
 ```
 
-如果省略远端路径，默认挂载远端登录用户的 home：
+Useful checks:
 
 ```bash
-./rsshmount mount gpu01
+python -m py_compile $(find src build -name '*.py' -print) launcher.py
+python -m ssh_mountmate --version
+python -m ssh_mountmate --install-help
 ```
 
-默认挂载点是：
+## 中文说明
+
+SSH MountMate 是一个跨平台桌面程序，用来通过 SSH/SFTP 把 Linux 服务器目录挂载成本地磁盘或本地文件夹。
+
+它底层使用 rclone 完成真正的挂载，GUI 负责处理依赖检查、SSH 配置导入、rclone 配置生成、挂载选项、日志查看和开机挂载等操作。
+
+## 功能
+
+- 在 Windows、macOS、Linux 上挂载 Linux 服务器目录。
+- 从已有 OpenSSH config 导入 Host，并作为可编辑默认值。
+- 手动添加连接，支持主机、用户名、端口、密码、密钥文件和密钥短语。
+- 密码和密钥短语通过 `rclone obscure` 保存，不明文存储。
+- 检查 rclone 和系统挂载依赖。
+- Windows 上可引导通过 winget 安装 rclone。
+- 在 GUI 中配置全局 rclone VFS 缓存选项。
+- 在连接卡片中显示挂载状态、容量、日志和常用操作。
+- 通过 GitHub Actions 构建 Windows、macOS、Linux 三个平台的单文件可执行程序。
+
+## 运行依赖
+
+SSH MountMate 不内置 rclone。请单独安装 rclone，或者在 Windows 上让程序引导安装。
+
+Windows：
+
+- Windows 10 或 11
+- rclone
+- WinFsp
+- OpenSSH Client
+
+macOS：
+
+- rclone
+- macFUSE
+- OpenSSH Client
+
+Linux：
+
+- rclone
+- FUSE 支持，通常是 `fuse3`
+- OpenSSH Client
+
+远端服务器默认按 Linux SSH/SFTP 服务器处理。
+
+## 下载
+
+在 GitHub Release 中下载对应平台的包：
+
+- `SSHMountMate-windows-x64.zip`
+- `SSHMountMate-macos-arm64-x64.zip`
+- `SSHMountMate-linux-x64.zip`
+
+这些发布包由 GitHub Actions 从同一份 Python 代码构建。
+
+## 快速开始
+
+1. 安装上面列出的系统依赖。
+2. 确认普通 SSH 可以登录：
+
+   ```bash
+   ssh your-host
+   ```
+
+3. 启动 `SSHMountMate`。
+4. 点击 `Add config`。
+5. 选择：
+   - `SSH config`：从已有 SSH Host 中选择，并自动填充默认值。
+   - `Manual`：手动填写主机、用户名、端口和认证信息。
+6. 选择远端路径。默认基准目录是 `$HOME`。
+7. 保存后，在连接卡片上点击挂载按钮。
+
+Windows 上 `Auto` 挂载点会自动选择可用盘符。macOS 和 Linux 上默认使用每个连接自己的挂载目录。
+
+## SSH Config 导入
+
+SSH MountMate 会读取 OpenSSH config 中具体的 `Host` 条目。选择后会自动填充：
+
+- 名称
+- 主机/IP
+- 用户名
+- 端口
+- 密钥文件
+
+导入后，连接会作为可编辑的 rclone SFTP 配置保存。实际挂载行为由 GUI 中看到的字段决定，而不是隐藏地实时调用某条 SSH 命令。
+
+## 密码和密钥短语
+
+密码和密钥短语会通过：
+
+```bash
+rclone obscure
+```
+
+转换后写入 SSH MountMate 私有的 rclone 配置。这样可以避免明文保存，但这不是强加密；本机用户账号和配置目录仍应视为敏感数据。
+
+## 主机指纹校验
+
+SSH MountMate 会尽量启用 rclone 的 host key 校验。
+
+对于 rclone SFTP remote，程序会维护自己的 `known_hosts` 文件，并用 `ssh-keyscan` 按目标 host 和 port 刷新服务器返回的 host key。这可以避免一种常见情况：OpenSSH 可以连接，但用户 `~/.ssh/known_hosts` 里只保存了一种 key，rclone 选择了另一种 key 后拒绝连接。
+
+如果无法扫描 host key，程序会回退使用用户默认的 OpenSSH `known_hosts` 文件。
+
+## 设置
+
+Settings 页面包含：
+
+- 依赖检查
+- 挂载日志
+- 语言选择
+- Windows 开机挂载
+- rclone VFS 缓存目录
+- VFS 缓存模式
+- 最大缓存大小
+- 最大缓存寿命
+- 最小剩余空间
+- 写回延迟
+- 目录缓存时间
+- 读取缓冲大小
+
+每个选项在 GUI 中都有鼠标悬停说明。
+
+## 从源码构建
+
+需要 Python 3.10 或更新版本。
+
+在仓库根目录执行：
+
+```bash
+python -m pip install -e ".[build]"
+python build/build_local.py
+```
+
+生成的可执行文件位于：
 
 ```text
-~/mnt/<Host>
+dist/
 ```
 
-## Windows 安装到用户目录
+PyInstaller 只能稳定地为当前操作系统构建。要生成三平台产物，请使用 GitHub Actions 或分别在对应系统上构建。
 
-```powershell
-.\app\install.ps1
-%LOCALAPPDATA%\rsshmount\rsshmount.cmd doctor
-```
+## 开发
 
-## 打包 Windows
+从源码启动 GUI：
 
 ```bash
-./scripts/package-windows-amd64.sh
+python -m pip install -e .
+python -m ssh_mountmate
 ```
 
-脚本会生成：
-
-```text
-dist/ssh-mountmate-windows.zip
-```
-
-发布包结构：
-
-```text
-ssh-mountmate-windows/
-  启动 SSH MountMate.cmd
-  README.md
-  app/
-    rsshmount.py
-    rsshmount_gui.pyw
-    rsshmount.cmd
-    rsshmount-gui.cmd
-    install.ps1
-```
-
-## 自定义 SSH config
-
-默认使用 OpenSSH 自己的配置查找逻辑。需要指定配置文件时：
+常用检查：
 
 ```bash
-rsshmount --ssh-config ~/.ssh/work_config init gpu01
-rsshmount --ssh-config ~/.ssh/work_config mount gpu01 /data ~/mnt/gpu01
+python -m py_compile $(find src build -name '*.py' -print) launcher.py
+python -m ssh_mountmate --version
+python -m ssh_mountmate --install-help
 ```
-
-## 常见问题
-
-后台挂载失败时看日志：
-
-```bash
-cat ~/.local/state/rsshmount/gpu01.log
-```
-
-如果需要让其他本地用户访问挂载目录，可加 `--allow-other`，但系统需要在 `/etc/fuse.conf` 中启用 `user_allow_other`。
