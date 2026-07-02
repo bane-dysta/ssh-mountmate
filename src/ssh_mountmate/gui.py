@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 import shlex
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, Button, Canvas, Checkbutton, Entry, Frame, Label, Scrollbar, StringVar, Text, Tk, Toplevel, filedialog, messagebox
 from tkinter import font as tkfont
@@ -33,6 +34,9 @@ BUFFER_SIZE_CHOICES = ["default (16Mi)", "0", "8Mi", "16Mi", "32Mi", "64Mi", "12
 LANGUAGE_CHOICES = {"auto": "Auto", "en": "English", "zh": "中文"}
 FONT_FAMILY_EN = "Segoe UI"
 FONT_FAMILY_ZH = "Noto Sans CJK SC"
+RCLONE_CONFIG_LOCK = threading.Lock()
+MOUNT_ALL_WORKERS = 3
+UNMOUNT_ALL_WORKERS = 5
 TEXT = {
     "en": {
         "ready": "Ready",
@@ -43,6 +47,10 @@ TEXT = {
         "refresh": "Refresh",
         "mount_all": "Mount all",
         "unmount_all": "Unmount all",
+        "mount_all_started": "Mounting {count} configs...",
+        "unmount_all_started": "Unmounting {count} configs...",
+        "batch_complete": "Batch operation complete. {done}/{count} changed.",
+        "batch_busy": "A batch operation is already running.",
         "checking_deps": "Checking dependencies...",
         "check_dependencies": "Check dependencies",
         "install_missing_dependencies": "Install missing dependencies",
@@ -153,6 +161,10 @@ TEXT = {
         "refresh": "刷新",
         "mount_all": "批量挂载",
         "unmount_all": "批量取消挂载",
+        "mount_all_started": "正在挂载 {count} 个配置...",
+        "unmount_all_started": "正在取消挂载 {count} 个配置...",
+        "batch_complete": "批量操作完成，已处理 {done}/{count} 个。",
+        "batch_busy": "已有批量操作正在执行。",
         "checking_deps": "正在检查依赖...",
         "check_dependencies": "检查依赖",
         "install_missing_dependencies": "安装缺失依赖",
@@ -1322,20 +1334,21 @@ def write_manual_remote(server: dict, rclone: str) -> None:
 
 
 def ensure_remote(server: dict, rclone: str) -> None:
-    if connection_method_value(server) == "openssh":
-        write_manual_remote(server, rclone)
-    elif server["mode"] == "ssh_config":
-        rsshmount.ensure_rclone_remote(server["host_alias"], None, "auto")
-    else:
-        write_manual_remote(server, rclone)
+    with RCLONE_CONFIG_LOCK:
+        if connection_method_value(server) == "openssh":
+            write_manual_remote(server, rclone)
+        elif server["mode"] == "ssh_config":
+            rsshmount.ensure_rclone_remote(server["host_alias"], None, "auto")
+        else:
+            write_manual_remote(server, rclone)
 
 
 def remote_name(server: dict) -> str:
     return server_remote_name_for_state(server)
 
 
-def mount_server(server: dict, rclone: str) -> dict:
-    if verified_mount_status(server) == "mounted":
+def mount_server(server: dict, rclone: str, *, verify_existing: bool = True) -> dict:
+    if verify_existing and verified_mount_status(server) == "mounted":
         raise RuntimeError("This config is already mounted. Unmount it before mounting again.")
     ensure_remote(server, rclone)
     settings = load_settings()
@@ -1512,6 +1525,9 @@ class App:
         self.refresh_generation = 0
         self.card_action_columns = 4
         self.resize_refresh_pending = False
+        self.batch_operation_running = False
+        self.mount_all_button = None
+        self.unmount_all_button = None
 
         self.build()
         self.root.protocol("WM_DELETE_WINDOW", self.exit_app)
@@ -1569,11 +1585,20 @@ class App:
         bottom = Frame(self.root, padx=10, pady=8)
         bottom.pack(fill=X)
         Label(bottom, textvariable=self.status).pack(side=LEFT)
-        Button(bottom, text=self.t("unmount_all"), command=self.unmount_all).pack(side=RIGHT, padx=(6, 0))
-        Button(bottom, text=self.t("mount_all"), command=self.mount_all).pack(side=RIGHT)
+        self.unmount_all_button = Button(bottom, text=self.t("unmount_all"), command=self.unmount_all)
+        self.unmount_all_button.pack(side=RIGHT, padx=(6, 0))
+        self.mount_all_button = Button(bottom, text=self.t("mount_all"), command=self.mount_all)
+        self.mount_all_button.pack(side=RIGHT)
+        self.update_batch_buttons()
 
     def exit_app(self) -> None:
         self.root.destroy()
+
+    def update_batch_buttons(self) -> None:
+        state = "disabled" if self.batch_operation_running else "normal"
+        for button in (self.mount_all_button, self.unmount_all_button):
+            if button is not None:
+                button.configure(state=state)
 
     def refresh_list(self) -> None:
         for child in self.cards_frame.winfo_children():
@@ -2093,33 +2118,77 @@ class App:
         except Exception as exc:
             self.show_error(str(exc))
 
-    def mount_all(self) -> None:
-        errors: list[str] = []
-        for server in list(self.servers):
-            try:
-                if verified_mount_status(server) != "mounted":
-                    mount_server(server, self.current_rclone())
-            except Exception as exc:
-                errors.append(f"{server.get('name') or server.get('id')}: {exc}")
-            self.root.update_idletasks()
+    def batch_statuses(self, servers: list[dict]) -> dict[str, str]:
+        processes = running_rclone_processes() if os.name == "nt" else None
+        statuses: dict[str, str] = {}
+        for server in servers:
+            server_id = server.get("id", "")
+            if not server_id:
+                continue
+            statuses[server_id] = mount_status_with_processes(server, processes) if processes is not None else mount_status(server)
+        return statuses
+
+    def finish_batch_operation(self, count: int, done: int, errors: list[str]) -> None:
+        self.batch_operation_running = False
+        self.update_batch_buttons()
+        self.status.set(self.t("batch_complete", done=done, count=count))
         self.refresh_list()
         self.refresh_mount_status_async()
         if errors:
             self.show_error("\n\n".join(errors))
 
-    def unmount_all(self) -> None:
-        errors: list[str] = []
-        for server in list(self.servers):
+    def run_batch_operation(self, operation: str, workers: int, started_key: str) -> None:
+        if self.batch_operation_running:
+            self.status.set(self.t("batch_busy"))
+            return
+        servers = [dict(server) for server in self.servers]
+        rclone = self.current_rclone()
+        self.batch_operation_running = True
+        self.update_batch_buttons()
+
+        def worker() -> None:
+            errors: list[str] = []
+            done = 0
+            count = 0
+
             try:
-                if verified_mount_status(server) == "mounted":
-                    unmount_server(server)
+                statuses = self.batch_statuses(servers)
+                if operation == "mount":
+                    targets = [server for server in servers if statuses.get(server.get("id", "")) != "mounted"]
+                else:
+                    targets = [server for server in servers if statuses.get(server.get("id", "")) == "mounted"]
+                count = len(targets)
+                self.root.after(0, lambda: self.status.set(self.t(started_key, count=count)))
+
+                def run_one(server: dict) -> None:
+                    if operation == "mount":
+                        mount_server(server, rclone, verify_existing=False)
+                    else:
+                        unmount_server(server)
+
+                if count:
+                    max_workers = max(1, min(workers, count))
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        futures = {executor.submit(run_one, server): server for server in targets}
+                        for future in as_completed(futures):
+                            server = futures[future]
+                            try:
+                                future.result()
+                                done += 1
+                            except Exception as exc:
+                                errors.append(f"{server.get('name') or server.get('id')}: {exc}")
             except Exception as exc:
-                errors.append(f"{server.get('name') or server.get('id')}: {exc}")
-            self.root.update_idletasks()
-        self.refresh_list()
-        self.refresh_mount_status_async()
-        if errors:
-            self.show_error("\n\n".join(errors))
+                errors.append(str(exc))
+
+            self.root.after(0, lambda: self.finish_batch_operation(count, done, errors))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def mount_all(self) -> None:
+        self.run_batch_operation("mount", MOUNT_ALL_WORKERS, "mount_all_started")
+
+    def unmount_all(self) -> None:
+        self.run_batch_operation("unmount", UNMOUNT_ALL_WORKERS, "unmount_all_started")
 
     def add_config(self) -> None:
         dialog = ServerDialog(self.root, rclone=self.current_rclone(), lang=self.lang, existing_servers=self.servers)
