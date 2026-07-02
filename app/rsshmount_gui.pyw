@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, Button, Canvas, Checkbutton, Entry, Frame, Label, Scrollbar, StringVar, Text, Tk, Toplevel, filedialog, messagebox
 from tkinter import font as tkfont
@@ -445,9 +446,15 @@ def load_servers() -> list[dict]:
     if not path.exists():
         return []
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        servers = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
+    if not isinstance(servers, list):
+        return []
+    servers, changed = normalize_server_ids(servers)
+    if changed:
+        save_servers(servers)
+    return servers
 
 
 def list_ssh_config_hosts(config_path: Path | None = None, seen: set[Path] | None = None) -> list[str]:
@@ -492,6 +499,69 @@ def list_ssh_config_hosts(config_path: Path | None = None, seen: set[Path] | Non
 def save_servers(servers: list[dict]) -> None:
     app_dir().mkdir(parents=True, exist_ok=True)
     servers_path().write_text(json.dumps(servers, indent=2), encoding="utf-8")
+
+
+def sanitize_server_id(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in (value or "").strip())
+    return cleaned.strip("._-") or f"server-{uuid.uuid4().hex[:8]}"
+
+
+def make_unique_server_id(base: str, used: set[str]) -> str:
+    root = sanitize_server_id(base)
+    if root not in used:
+        return root
+    for number in range(2, 1000):
+        candidate = f"{root}-{number}"
+        if candidate not in used:
+            return candidate
+    while True:
+        candidate = f"{root}-{uuid.uuid4().hex[:8]}"
+        if candidate not in used:
+            return candidate
+
+
+def server_remote_name_for_state(server: dict) -> str:
+    return server.get("host_alias", "") if server.get("mode") == "ssh_config" else server.get("id", "")
+
+
+def expected_remote_for_state(server: dict) -> str:
+    return rsshmount.remote_spec(server_remote_name_for_state(server), server.get("remote_path") or "")
+
+
+def state_matches_server(state: dict, server: dict) -> bool:
+    return bool(state.get("remote")) and state.get("remote") == expected_remote_for_state(server)
+
+
+def normalize_server_ids(servers: list[dict]) -> tuple[list[dict], bool]:
+    normalized = [dict(server) for server in servers]
+    groups: dict[str, list[int]] = {}
+    for index, server in enumerate(normalized):
+        groups.setdefault(server.get("id") or "", []).append(index)
+
+    used: set[str] = set()
+    changed = False
+    for original_id, indexes in groups.items():
+        keep_index = indexes[0]
+        if original_id and len(indexes) > 1:
+            try:
+                state = json.loads((rsshmount.app_state_dir() / f"{original_id}.json").read_text(encoding="utf-8"))
+            except Exception:
+                state = {}
+            for index in indexes:
+                if state_matches_server(state, normalized[index]):
+                    keep_index = index
+                    break
+        for index in indexes:
+            server = normalized[index]
+            current_id = server.get("id") or ""
+            if current_id and index == keep_index and current_id not in used:
+                used.add(current_id)
+                continue
+            base = server.get("name") or server.get("host_alias") or server.get("host") or current_id
+            server["id"] = make_unique_server_id(base, used)
+            used.add(server["id"])
+            changed = True
+    return normalized, changed
 
 
 def server_label(server: dict) -> str:
@@ -990,7 +1060,7 @@ def ensure_remote(server: dict, rclone: str) -> None:
 
 
 def remote_name(server: dict) -> str:
-    return server["host_alias"] if server["mode"] == "ssh_config" else server["id"]
+    return server_remote_name_for_state(server)
 
 
 def mount_server(server: dict, rclone: str) -> dict:
@@ -1703,6 +1773,7 @@ class App:
         dialog = ServerDialog(self.root, rclone=self.current_rclone(), lang=self.lang)
         self.root.wait_window(dialog.window)
         if dialog.result:
+            dialog.result["id"] = make_unique_server_id(dialog.result.get("id") or dialog.result.get("name", ""), {server.get("id", "") for server in self.servers})
             self.servers.append(dialog.result)
             save_servers(self.servers)
             if load_settings().get("startup_all"):
