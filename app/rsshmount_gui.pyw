@@ -1254,6 +1254,7 @@ class App:
         self.dependency_checking = False
         self.mount_status_cache: dict[str, str] = {}
         self.capacity_cache: dict[str, dict] = {}
+        self.refresh_generation = 0
 
         self.build()
         self.root.protocol("WM_DELETE_WINDOW", self.exit_app)
@@ -1365,28 +1366,50 @@ class App:
         if self.status_refreshing:
             return
         self.status_refreshing = True
+        self.refresh_generation += 1
+        generation = self.refresh_generation
         servers = [dict(server) for server in self.servers]
         rclone = self.current_rclone()
 
         def worker() -> None:
             processes = running_rclone_processes() if os.name == "nt" else None
             statuses: dict[str, str] = {}
-            capacities: dict[str, dict] = {}
             for server in servers:
                 server_id = server.get("id", "")
                 if not server_id:
                     continue
                 status = mount_status_with_processes(server, processes) if processes is not None else mount_status(server)
                 statuses[server_id] = status
-                capacities[server_id] = capacity_info(server, rclone, status)
-            self.root.after(0, lambda: self.apply_mount_statuses(statuses, capacities))
+            self.root.after(0, lambda: self.apply_mount_statuses(generation, statuses))
+
+            capacities: dict[str, dict] = {}
+            for server in servers:
+                server_id = server.get("id", "")
+                if not server_id or statuses.get(server_id) != "mounted":
+                    continue
+                capacities[server_id] = capacity_info(server, rclone, statuses[server_id])
+            self.root.after(0, lambda: self.apply_capacity_infos(generation, statuses, capacities))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def apply_mount_statuses(self, statuses: dict[str, str], capacities: dict[str, dict]) -> None:
+    def apply_mount_statuses(self, generation: int, statuses: dict[str, str]) -> None:
+        if generation != self.refresh_generation:
+            return
         self.status_refreshing = False
         self.mount_status_cache = statuses
-        self.capacity_cache = capacities
+        for server_id, status in statuses.items():
+            if status != "mounted":
+                self.capacity_cache.pop(server_id, None)
+        self.refresh_list()
+
+    def apply_capacity_infos(self, generation: int, statuses: dict[str, str], capacities: dict[str, dict]) -> None:
+        if generation != self.refresh_generation:
+            return
+        for server_id, status in statuses.items():
+            if status == "mounted" and server_id in capacities:
+                self.capacity_cache[server_id] = capacities[server_id]
+            elif status != "mounted":
+                self.capacity_cache.pop(server_id, None)
         self.refresh_list()
 
     def on_cards_mousewheel(self, event) -> None:
