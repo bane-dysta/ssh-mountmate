@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import platform
 from pathlib import Path
 
 from .paths import managed_bin_dir
@@ -21,6 +22,21 @@ def managed_rclone_path() -> Path:
     return managed_bin_dir() / current_platform().rclone_binary
 
 
+def common_rclone_paths(system: str | None = None) -> list[Path]:
+    platform_name = system or platform.system()
+    if platform_name == "Windows":
+        return []
+    home = Path.home()
+    return [
+        home / ".local" / "bin" / "rclone",
+        Path("/opt/homebrew/bin/rclone"),
+        Path("/usr/local/bin/rclone"),
+        Path("/opt/local/bin/rclone"),
+        Path("/usr/bin/rclone"),
+        Path("/snap/bin/rclone"),
+    ]
+
+
 def resolve_rclone(app_root: Path, configured_path: str = "") -> str:
     if configured_path:
         path = Path(configured_path).expanduser()
@@ -33,7 +49,12 @@ def resolve_rclone(app_root: Path, configured_path: str = "") -> str:
     if managed.exists():
         return str(managed)
     found = shutil.which(current_platform().rclone_binary) or shutil.which("rclone")
-    return found or ""
+    if found:
+        return found
+    for candidate in common_rclone_paths():
+        if candidate.exists():
+            return str(candidate)
+    return ""
 
 
 def rclone_version(rclone_path: str) -> str:

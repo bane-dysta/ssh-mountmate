@@ -387,9 +387,21 @@ def refresh_windows_path_env() -> None:
 
 
 def known_rclone_paths() -> list[Path]:
-    if os.name != "nt":
-        return []
     candidates: list[Path] = []
+    if os.name != "nt":
+        home = Path.home()
+        candidates.extend(
+            [
+                home / ".local" / "bin" / "rclone",
+                Path("/opt/homebrew/bin/rclone"),
+                Path("/usr/local/bin/rclone"),
+                Path("/opt/local/bin/rclone"),
+                Path("/usr/bin/rclone"),
+                Path("/snap/bin/rclone"),
+            ]
+        )
+        return candidates
+
     localappdata = os.environ.get("LOCALAPPDATA")
     programfiles = os.environ.get("ProgramFiles")
     programfiles_x86 = os.environ.get("ProgramFiles(x86)")

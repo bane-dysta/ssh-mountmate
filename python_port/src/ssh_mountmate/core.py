@@ -181,7 +181,25 @@ def bundled_rclone(cli_path: str | None) -> str:
     if path_rclone:
         return path_rclone
 
+    for candidate in common_rclone_paths():
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+
     die("rclone not found. Use the packaged release with bin/rclone, or set RSSHMOUNT_RCLONE.")
+
+
+def common_rclone_paths() -> list[Path]:
+    if is_windows():
+        return []
+    home = Path.home()
+    return [
+        home / ".local" / "bin" / "rclone",
+        Path("/opt/homebrew/bin/rclone"),
+        Path("/usr/local/bin/rclone"),
+        Path("/opt/local/bin/rclone"),
+        Path("/usr/bin/rclone"),
+        Path("/snap/bin/rclone"),
+    ]
 
 
 def ssh_base_args(ssh_config: str | None) -> list[str]:
