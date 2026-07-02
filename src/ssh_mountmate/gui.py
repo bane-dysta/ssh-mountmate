@@ -1221,15 +1221,21 @@ def run_visible_winget_install(title: str, package_id: str) -> tuple[int, Path]:
                 "",
             ]
         ),
-        encoding="utf-8",
+        encoding="utf-8-sig",
     )
     ps_script.write_text(
         "\n".join(
             [
                 "$ErrorActionPreference = 'Continue'",
+                "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+                "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+                "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'",
                 f"$LogPath = {ps_quote(str(log_path))}",
                 "New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LogPath) | Out-Null",
-                'function Write-InstallLog([string]$Message) { $Message | Tee-Object -FilePath $LogPath -Append }',
+                "function Write-InstallLog([string]$Message) {",
+                "  Add-Content -Path $LogPath -Value $Message -Encoding UTF8",
+                "  Write-Host $Message",
+                "}",
                 'Write-InstallLog ""',
                 'Write-InstallLog "==== SSH MountMate dependency install ===="',
                 'Write-InstallLog ("Started: " + (Get-Date -Format o))',
@@ -1244,7 +1250,7 @@ def run_visible_winget_install(title: str, package_id: str) -> tuple[int, Path]:
                 "}",
                 'Write-InstallLog ("winget: " + $Winget.Source)',
                 'Write-InstallLog ""',
-                f'& winget install --id "{package_id}" -e --accept-package-agreements --accept-source-agreements 2>&1 | Tee-Object -FilePath $LogPath -Append',
+                f'& winget install --id "{package_id}" -e --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object {{ Write-InstallLog ($_.ToString()) }}',
                 "$RC = $LASTEXITCODE",
                 'Write-InstallLog ""',
                 'Write-InstallLog ("Finished: " + (Get-Date -Format o))',
@@ -1257,12 +1263,13 @@ def run_visible_winget_install(title: str, package_id: str) -> tuple[int, Path]:
                 "exit $RC",
             ]
         ),
-        encoding="utf-8",
+        encoding="utf-8-sig",
     )
     script.write_text(
         "\n".join(
             [
                 "@echo off",
+                "chcp 65001 >nul",
                 f"title SSH MountMate - {title}",
                 f'>> "{log_path}" echo ==== SSH MountMate installer wrapper ====',
                 f'>> "{log_path}" echo Started: %DATE% %TIME%',
@@ -1288,7 +1295,7 @@ def run_visible_winget_install(title: str, package_id: str) -> tuple[int, Path]:
                 "echo This command window is intentionally left open for troubleshooting.",
             ]
         ),
-        encoding="utf-8",
+        encoding="utf-8-sig",
     )
     result = subprocess.run(
         ["cmd.exe", "/k", str(script)],
