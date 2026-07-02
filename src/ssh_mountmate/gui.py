@@ -40,6 +40,8 @@ TEXT = {
         "settings": "Settings",
         "add_config": "Add config",
         "refresh": "Refresh",
+        "mount_all": "Mount all",
+        "unmount_all": "Unmount all",
         "checking_deps": "Checking dependencies...",
         "check_dependencies": "Check dependencies",
         "install_missing_dependencies": "Install missing dependencies",
@@ -108,6 +110,13 @@ TEXT = {
         "edit_config_title": "Edit config",
         "source": "Source",
         "ssh_config": "SSH config",
+        "ssh_config_batch": "SSH config (batch)",
+        "ssh_config_file": "SSH config file",
+        "browse": "Browse",
+        "preview": "Preview",
+        "import_configs": "Import configs",
+        "no_importable_hosts": "No concrete Host entries found in this SSH config.",
+        "imported_configs": "Imported {count} configs.",
         "manual": "Manual",
         "ssh_host": "SSH Host",
         "name": "Name",
@@ -135,6 +144,8 @@ TEXT = {
         "settings": "设置",
         "add_config": "新增配置",
         "refresh": "刷新",
+        "mount_all": "批量挂载",
+        "unmount_all": "批量取消挂载",
         "checking_deps": "正在检查依赖...",
         "check_dependencies": "检查依赖",
         "install_missing_dependencies": "安装缺失依赖",
@@ -203,6 +214,13 @@ TEXT = {
         "edit_config_title": "编辑配置",
         "source": "来源",
         "ssh_config": "SSH 配置",
+        "ssh_config_batch": "SSH 配置（批量）",
+        "ssh_config_file": "SSH 配置文件",
+        "browse": "浏览",
+        "preview": "预览",
+        "import_configs": "导入配置",
+        "no_importable_hosts": "这个 SSH config 中没有找到具体 Host。",
+        "imported_configs": "已导入 {count} 个配置。",
         "manual": "手动",
         "ssh_host": "SSH Host",
         "name": "名称",
@@ -473,8 +491,8 @@ def load_servers() -> list[dict]:
     return servers
 
 
-def list_ssh_config_hosts(config_path: Path | None = None, seen: set[Path] | None = None) -> list[str]:
-    config = config_path or (Path.home() / ".ssh" / "config")
+def list_ssh_config_hosts(config_path: str | Path | None = None, seen: set[Path] | None = None) -> list[str]:
+    config = Path(config_path).expanduser() if config_path else (Path.home() / ".ssh" / "config")
     seen = seen or set()
     try:
         resolved = config.resolve()
@@ -912,10 +930,10 @@ def mountpoint_choices() -> list[str]:
     return choices
 
 
-def ssh_config_defaults(host_alias: str) -> dict:
+def ssh_config_defaults(host_alias: str, config_path: str | Path | None = None) -> dict:
     if not host_alias:
         return {}
-    config = rsshmount.read_ssh_config(host_alias, None)
+    config = rsshmount.read_ssh_config(host_alias, str(config_path) if config_path else None)
     key_file = rsshmount.first_usable_path(config.get("identityfile", []), must_exist=True)
     return {
         "name": host_alias,
@@ -925,6 +943,44 @@ def ssh_config_defaults(host_alias: str) -> dict:
         "port": rsshmount.first_ssh_value(config, "port", "22"),
         "key_file": key_file,
     }
+
+
+def server_from_ssh_config_host(host_alias: str, config_path: str | Path | None = None) -> dict:
+    defaults = ssh_config_defaults(host_alias, config_path)
+    name = defaults.get("name") or host_alias
+    return {
+        "id": sanitize_server_id(name),
+        "name": name,
+        "mode": "manual",
+        "source": "ssh_config",
+        "host_alias": host_alias,
+        "host": defaults.get("host", host_alias),
+        "user": defaults.get("user", ""),
+        "port": defaults.get("port") or "22",
+        "auth": "key",
+        "key_file": defaults.get("key_file", ""),
+        "remote_path": "",
+        "mountpoint": "",
+        "cache_mode": "",
+    }
+
+
+def ssh_config_batch_servers(config_path: str | Path) -> tuple[list[dict], list[str]]:
+    path = Path(config_path).expanduser()
+    hosts = list_ssh_config_hosts(path)
+    servers: list[dict] = []
+    errors: list[str] = []
+    for host_alias in hosts:
+        try:
+            server = server_from_ssh_config_host(host_alias, path)
+        except Exception as exc:
+            errors.append(f"{host_alias}: {exc}")
+            continue
+        if not server.get("host") or not server.get("user"):
+            errors.append(f"{host_alias}: missing HostName or User")
+            continue
+        servers.append(server)
+    return servers, errors
 
 
 def winfsp_installed() -> bool:
@@ -1035,7 +1091,7 @@ def install_rclone() -> None:
     if resolve_rclone_path():
         return
     if os.name != "nt":
-        raise RuntimeError("rclone is missing. Install rclone and retry.")
+        raise RuntimeError("rclone is missing. Install rclone manually and retry.\n\n" + manual_install_text())
     code, log_path = run_visible_winget_install("rclone", "Rclone.Rclone")
     refresh_windows_path_env()
     if resolve_rclone_path():
@@ -1352,6 +1408,8 @@ class App:
         bottom = Frame(self.root, padx=10, pady=8)
         bottom.pack(fill=X)
         Label(bottom, textvariable=self.status).pack(side=LEFT)
+        Button(bottom, text=self.t("unmount_all"), command=self.unmount_all).pack(side=RIGHT, padx=(6, 0))
+        Button(bottom, text=self.t("mount_all"), command=self.mount_all).pack(side=RIGHT)
 
     def exit_app(self) -> None:
         self.root.destroy()
@@ -1874,18 +1932,53 @@ class App:
         except Exception as exc:
             self.show_error(str(exc))
 
+    def mount_all(self) -> None:
+        errors: list[str] = []
+        for server in list(self.servers):
+            try:
+                if verified_mount_status(server) != "mounted":
+                    mount_server(server, self.current_rclone())
+            except Exception as exc:
+                errors.append(f"{server.get('name') or server.get('id')}: {exc}")
+            self.root.update_idletasks()
+        self.refresh_list()
+        self.refresh_mount_status_async()
+        if errors:
+            self.show_error("\n\n".join(errors))
+
+    def unmount_all(self) -> None:
+        errors: list[str] = []
+        for server in list(self.servers):
+            try:
+                if verified_mount_status(server) == "mounted":
+                    unmount_server(server)
+            except Exception as exc:
+                errors.append(f"{server.get('name') or server.get('id')}: {exc}")
+            self.root.update_idletasks()
+        self.refresh_list()
+        self.refresh_mount_status_async()
+        if errors:
+            self.show_error("\n\n".join(errors))
+
     def add_config(self) -> None:
         dialog = ServerDialog(self.root, rclone=self.current_rclone(), lang=self.lang)
         self.root.wait_window(dialog.window)
         if dialog.result:
-            dialog.result["id"] = make_unique_server_id(dialog.result.get("id") or dialog.result.get("name", ""), {server.get("id", "") for server in self.servers})
-            self.servers.append(dialog.result)
+            results = dialog.result if isinstance(dialog.result, list) else [dialog.result]
+            used_ids = {server.get("id", "") for server in self.servers}
+            for result in results:
+                result["id"] = make_unique_server_id(result.get("id") or result.get("name", ""), used_ids)
+                used_ids.add(result["id"])
+                self.servers.append(result)
             save_servers(self.servers)
             if load_settings().get("startup_all"):
-                try:
-                    enable_startup(dialog.result)
-                except Exception:
-                    pass
+                for result in results:
+                    try:
+                        enable_startup(result)
+                    except Exception:
+                        pass
+            if len(results) > 1:
+                self.status.set(self.t("imported_configs", count=len(results)))
             self.refresh_list()
             self.refresh_mount_status_async()
 
@@ -1978,16 +2071,18 @@ class ServerDialog:
         self.source = StringVar(value=existing_source or "ssh_config")
         self.auth = StringVar(value=self.existing.get("auth", "key"))
         self.values: dict[str, Entry] = {}
+        self.batch_config_path = StringVar(value=str(Path.home() / ".ssh" / "config"))
         self.window = Toplevel(root)
         self.window.title(self.t("edit_config_title") if existing else self.t("add_config_title"))
-        self.window.geometry("500x520")
-        self.window.minsize(460, 360)
+        self.window.geometry("580x600")
+        self.window.minsize(500, 420)
         self.window.resizable(True, True)
         self.canvas = Canvas(self.window, highlightthickness=0)
         self.scrollbar = Scrollbar(self.window, orient="vertical", command=self.canvas.yview)
         self.form = Frame(self.canvas)
         self.form.bind("<Configure>", lambda _event: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.create_window((0, 0), window=self.form, anchor="nw")
+        self.form_window = self.canvas.create_window((0, 0), window=self.form, anchor="nw")
+        self.canvas.bind("<Configure>", lambda event: self.canvas.itemconfigure(self.form_window, width=event.width))
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
         self.canvas.pack(side=LEFT, fill=BOTH, expand=True)
         self.scrollbar.pack(side=RIGHT, fill=Y)
@@ -2009,8 +2104,8 @@ class ServerDialog:
     def t(self, key: str, **kwargs) -> str:
         return tr_lang(self.lang, key, **kwargs)
 
-    def row(self, label: str, key: str, default: str = "", browse=False, secret=False):
-        frame = Frame(self.form, padx=10, pady=4)
+    def row(self, label: str, key: str, default: str = "", browse=False, secret=False, parent=None):
+        frame = Frame(parent or self.form, padx=10, pady=4)
         frame.pack(fill=X)
         Label(frame, text=label, width=14, anchor="w").pack(side=LEFT)
         entry = Entry(frame, show="*" if secret else None)
@@ -2021,8 +2116,8 @@ class ServerDialog:
             Button(frame, text="...", command=lambda: self.pick_file(key)).pack(side=RIGHT)
         return entry
 
-    def row_combo(self, label: str, key: str, values: list[str], default: str = ""):
-        frame = Frame(self.form, padx=10, pady=4)
+    def row_combo(self, label: str, key: str, values: list[str], default: str = "", parent=None):
+        frame = Frame(parent or self.form, padx=10, pady=4)
         frame.pack(fill=X)
         Label(frame, text=label, width=14, anchor="w").pack(side=LEFT)
         combo = ttk.Combobox(frame, values=values)
@@ -2034,9 +2129,9 @@ class ServerDialog:
         self.values[key] = combo
         return combo
 
-    def row_remote_path(self, remote_path: str) -> None:
+    def row_remote_path(self, remote_path: str, parent=None) -> None:
         base, suffix = split_remote_path(remote_path)
-        frame = Frame(self.form, padx=10, pady=4)
+        frame = Frame(parent or self.form, padx=10, pady=4)
         frame.pack(fill=X)
         Label(frame, text=self.t("remote_path"), width=14, anchor="w").pack(side=LEFT)
         combo = ttk.Combobox(frame, values=["$HOME", "/"], width=8, state="readonly")
@@ -2053,39 +2148,108 @@ class ServerDialog:
         source_frame.pack(fill=X)
         Label(source_frame, text=self.t("source"), width=14, anchor="w").pack(side=LEFT)
         ttk.Radiobutton(source_frame, text=self.t("ssh_config"), variable=self.source, value="ssh_config", command=self.on_source_changed).pack(side=LEFT)
+        if not self.existing:
+            ttk.Radiobutton(source_frame, text=self.t("ssh_config_batch"), variable=self.source, value="ssh_config_batch", command=self.on_source_changed).pack(side=LEFT)
         ttk.Radiobutton(source_frame, text=self.t("manual"), variable=self.source, value="manual", command=self.on_source_changed).pack(side=LEFT)
+
+        self.single_frame = Frame(self.form)
+        self.single_frame.pack(fill=X)
 
         hosts = list_ssh_config_hosts()
         host_default = self.existing.get("host_alias") or (hosts[0] if hosts else "")
-        self.host_combo = self.row_combo(self.t("ssh_host"), "host_alias", hosts, host_default)
+        self.host_combo = self.row_combo(self.t("ssh_host"), "host_alias", hosts, host_default, parent=self.single_frame)
         self.host_combo.bind("<<ComboboxSelected>>", self.on_ssh_host_selected)
 
-        self.row(self.t("name"), "name", self.existing.get("name", ""))
-        self.row(self.t("ip_host"), "host", self.existing.get("host", ""))
-        self.row(self.t("user"), "user", self.existing.get("user", ""))
-        self.row(self.t("port"), "port", str(self.existing.get("port") or "22"))
+        self.row(self.t("name"), "name", self.existing.get("name", ""), parent=self.single_frame)
+        self.row(self.t("ip_host"), "host", self.existing.get("host", ""), parent=self.single_frame)
+        self.row(self.t("user"), "user", self.existing.get("user", ""), parent=self.single_frame)
+        self.row(self.t("port"), "port", str(self.existing.get("port") or "22"), parent=self.single_frame)
 
-        auth_frame = Frame(self.form, padx=10, pady=4)
+        auth_frame = Frame(self.single_frame, padx=10, pady=4)
         auth_frame.pack(fill=X)
         Label(auth_frame, text=self.t("auth"), width=14, anchor="w").pack(side=LEFT)
         ttk.Radiobutton(auth_frame, text=self.t("key"), variable=self.auth, value="key").pack(side=LEFT)
         ttk.Radiobutton(auth_frame, text=self.t("password_auth"), variable=self.auth, value="password").pack(side=LEFT)
-        self.row(self.t("key_file"), "key_file", self.existing.get("key_file", ""), browse=True)
-        self.row(self.t("key_passphrase"), "key_passphrase", secret=True)
-        self.row(self.t("password"), "password", secret=True)
+        self.row(self.t("key_file"), "key_file", self.existing.get("key_file", ""), browse=True, parent=self.single_frame)
+        self.row(self.t("key_passphrase"), "key_passphrase", secret=True, parent=self.single_frame)
+        self.row(self.t("password"), "password", secret=True, parent=self.single_frame)
 
-        self.row_remote_path(self.existing.get("remote_path", ""))
-        self.row_combo(self.t("mountpoint"), "mountpoint", mountpoint_choices(), self.existing.get("mountpoint") or "Auto")
+        self.row_remote_path(self.existing.get("remote_path", ""), parent=self.single_frame)
+        self.row_combo(self.t("mountpoint"), "mountpoint", mountpoint_choices(), self.existing.get("mountpoint") or "Auto", parent=self.single_frame)
 
-        buttons = Frame(self.form, padx=10, pady=10)
-        buttons.pack(fill=X)
-        Button(buttons, text=self.t("save"), command=self.save).pack(side=RIGHT)
-        Button(buttons, text=self.t("cancel"), command=self.window.destroy).pack(side=RIGHT, padx=6)
+        self.build_batch_frame()
+
+        self.buttons_frame = Frame(self.form, padx=10, pady=10)
+        self.buttons_frame.pack(fill=X)
+        self.save_button = Button(self.buttons_frame, text=self.t("save"), command=self.save)
+        self.save_button.pack(side=RIGHT)
+        Button(self.buttons_frame, text=self.t("cancel"), command=self.window.destroy).pack(side=RIGHT, padx=6)
 
         self.update_source_controls()
         if self.source.get() == "ssh_config" and not self.existing and host_default:
             self.apply_ssh_defaults(host_default)
         self.bind_mousewheel_recursive(self.form)
+
+    def build_batch_frame(self) -> None:
+        self.batch_frame = Frame(self.form)
+
+        file_row = Frame(self.batch_frame, padx=10, pady=4)
+        file_row.pack(fill=X)
+        Label(file_row, text=self.t("ssh_config_file"), width=14, anchor="w").pack(side=LEFT)
+        file_entry = Entry(file_row, textvariable=self.batch_config_path)
+        file_entry.pack(side=LEFT, fill=X, expand=True)
+        file_entry.bind("<Return>", lambda _event: self.load_batch_preview())
+        file_entry.bind("<FocusOut>", lambda _event: self.load_batch_preview())
+        Button(file_row, text=self.t("browse"), command=self.pick_batch_config).pack(side=RIGHT, padx=(6, 0))
+
+        Label(self.batch_frame, text=self.t("preview"), anchor="w").pack(fill=X, padx=10, pady=(8, 2))
+        preview_frame = Frame(self.batch_frame, padx=10)
+        preview_frame.pack(fill=BOTH)
+        preview_scroll = Scrollbar(preview_frame)
+        self.batch_preview = Text(preview_frame, height=14, wrap="none", yscrollcommand=preview_scroll.set)
+        preview_scroll.configure(command=self.batch_preview.yview)
+        self.batch_preview.pack(side=LEFT, fill=BOTH, expand=True)
+        preview_scroll.pack(side=RIGHT, fill=Y)
+        self.batch_preview.bind("<MouseWheel>", self.on_batch_preview_mousewheel)
+        self.batch_preview.bind("<Button-4>", self.on_batch_preview_mousewheel)
+        self.batch_preview.bind("<Button-5>", self.on_batch_preview_mousewheel)
+        self.load_batch_preview()
+
+    def on_batch_preview_mousewheel(self, event):
+        if getattr(event, "num", None) == 4:
+            direction = -1
+        elif getattr(event, "num", None) == 5:
+            direction = 1
+        else:
+            delta = getattr(event, "delta", 0)
+            direction = -1 if delta > 0 else 1
+        self.batch_preview.yview_scroll(direction, "units")
+        return "break"
+
+    def pick_batch_config(self) -> None:
+        path = filedialog.askopenfilename(
+            initialdir=str((Path.home() / ".ssh").expanduser()),
+            initialfile="config",
+        )
+        if path:
+            self.batch_config_path.set(path)
+            self.load_batch_preview()
+
+    def load_batch_preview(self) -> None:
+        path = Path(self.batch_config_path.get()).expanduser()
+        try:
+            content = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError as exc:
+            content = str(exc)
+        try:
+            hosts = list_ssh_config_hosts(path)
+            summary = f"{len(hosts)} Host entries\n\n"
+        except Exception:
+            summary = ""
+        self.batch_preview.configure(state="normal")
+        self.batch_preview.delete("1.0", END)
+        self.batch_preview.insert("1.0", summary + content)
+        self.batch_preview.configure(state="disabled")
 
     def on_mousewheel(self, event) -> None:
         if getattr(event, "num", None) == 4:
@@ -2098,6 +2262,8 @@ class ServerDialog:
         self.canvas.yview_scroll(direction, "units")
 
     def bind_mousewheel_recursive(self, widget) -> None:
+        if widget is getattr(self, "batch_preview", None):
+            return
         widget.bind("<MouseWheel>", self.on_mousewheel)
         widget.bind("<Button-4>", self.on_mousewheel)
         widget.bind("<Button-5>", self.on_mousewheel)
@@ -2127,6 +2293,15 @@ class ServerDialog:
         entry.insert(0, value or "")
 
     def update_source_controls(self) -> None:
+        batch = self.source.get() == "ssh_config_batch"
+        if batch:
+            self.single_frame.pack_forget()
+            self.batch_frame.pack(fill=BOTH, expand=True, before=self.buttons_frame)
+            self.save_button.configure(text=self.t("import_configs"))
+        else:
+            self.batch_frame.pack_forget()
+            self.single_frame.pack(fill=X)
+            self.save_button.configure(text=self.t("save"))
         state = "readonly" if self.source.get() == "ssh_config" else "disabled"
         self.host_combo.configure(state=state)
 
@@ -2150,6 +2325,22 @@ class ServerDialog:
 
     def save(self) -> None:
         source = self.source.get()
+        if source == "ssh_config_batch":
+            servers, errors = ssh_config_batch_servers(self.batch_config_path.get())
+            if not servers:
+                message = self.t("no_importable_hosts")
+                if errors:
+                    message += "\n\n" + "\n".join(errors)
+                messagebox.showerror(APP_TITLE, message)
+                return
+            if errors:
+                self.result = servers
+                self.window.destroy()
+                return
+            self.result = servers
+            self.window.destroy()
+            return
+
         name = self.get("name") or self.get("host_alias") or self.get("host")
         if not name:
             messagebox.showerror(APP_TITLE, self.t("name_required"))
