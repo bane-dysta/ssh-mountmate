@@ -40,6 +40,31 @@ For future installer/download behavior, prefer `downloads.rclone.org` over
 GitHub release URLs when a direct download is needed. WinFsp/macFUSE/FUSE remain
 system dependencies because they provide OS-level filesystem support.
 
+Manual rclone install commands can be printed with:
+
+```bash
+python -m ssh_mountmate --install-help
+```
+
+Current guidance:
+
+```text
+Windows:
+  winget install --id Rclone.Rclone -e
+  Download and unzip: https://downloads.rclone.org/rclone-current-windows-amd64.zip
+  Place rclone.exe on PATH or next to SSHMountMate.exe.
+
+macOS:
+  brew install rclone
+  or: curl https://rclone.org/install.sh | sudo bash
+  Manual zip: https://downloads.rclone.org/rclone-current-osx-amd64.zip
+
+Linux:
+  curl https://rclone.org/install.sh | sudo bash
+  or use your distro package manager, for example: sudo apt install rclone
+  Manual zip: https://downloads.rclone.org/rclone-current-linux-amd64.zip
+```
+
 ## Local Development
 
 ```bash

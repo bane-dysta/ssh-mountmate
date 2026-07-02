@@ -19,6 +19,7 @@ from tkinter import ttk
 
 from . import VERSION
 from . import core as rsshmount
+from .rclone import manual_install_text
 
 
 APP_TITLE = "SSH MountMate"
@@ -2169,8 +2170,12 @@ class ServerDialog:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", action="version", version=f"{APP_TITLE} Python Port {VERSION}")
+    parser.add_argument("--install-help", action="store_true", help="Print manual rclone install commands and exit.")
     parser.add_argument("--mount-id")
     args = parser.parse_args()
+    if args.install_help:
+        print(manual_install_text())
+        return 0
     if args.mount_id:
         return headless_mount(args.mount_id)
     root = Tk()

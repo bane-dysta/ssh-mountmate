@@ -62,3 +62,33 @@ def rclone_download_url(version: str = "current", system: str | None = None, arc
     else:
         target = f"rclone-{version}-linux-{arch}.zip"
     return f"https://downloads.rclone.org/{target}"
+
+
+def manual_install_commands() -> dict[str, list[str]]:
+    return {
+        "Windows": [
+            "winget install --id Rclone.Rclone -e",
+            f"Download and unzip: {rclone_download_url(system='Windows')}",
+            "Place rclone.exe on PATH or next to SSHMountMate.exe.",
+        ],
+        "macOS": [
+            "brew install rclone",
+            "or: curl https://rclone.org/install.sh | sudo bash",
+            f"Manual zip: {rclone_download_url(system='Darwin')}",
+        ],
+        "Linux": [
+            "curl https://rclone.org/install.sh | sudo bash",
+            "or use your distro package manager, for example: sudo apt install rclone",
+            f"Manual zip: {rclone_download_url(system='Linux')}",
+        ],
+    }
+
+
+def manual_install_text() -> str:
+    lines = ["rclone manual install options", ""]
+    for system, commands in manual_install_commands().items():
+        lines.append(f"{system}:")
+        for command in commands:
+            lines.append(f"  {command}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
