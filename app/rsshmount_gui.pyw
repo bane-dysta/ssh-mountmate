@@ -604,6 +604,12 @@ def command_matches_state(command: str, state: dict) -> bool:
     return all(str(value).casefold() in command for value in expected if value)
 
 
+def process_command(pid: int) -> str:
+    if os.name != "nt" or not pid:
+        return ""
+    return running_rclone_processes().get(pid, "")
+
+
 def mount_status_with_processes(server: dict, processes: dict[int, str]) -> str:
     state_file = server_state_file(server)
     if not state_file.exists():
@@ -634,14 +640,47 @@ def mountpoint_ready(mountpoint: str) -> bool:
         return False
 
 
-def wait_for_mount_ready(proc: subprocess.Popen, mountpoint: str, log_path: Path, timeout: float = 20.0) -> None:
+def wait_for_mount_ready(
+    proc: subprocess.Popen,
+    mountpoint: str,
+    log_path: Path,
+    expected_state: dict,
+    *,
+    ready_before_start: bool,
+    timeout: float = 20.0,
+) -> None:
     deadline = time.time() + timeout
+    ready_since = 0.0
     while time.time() < deadline:
         if proc.poll() is not None:
             break
-        if mountpoint_ready(mountpoint):
-            return
+        ready_now = mountpoint_ready(mountpoint)
+        if ready_before_start:
+            if not ready_now:
+                ready_before_start = False
+            time.sleep(0.25)
+            continue
+        if ready_now:
+            if not ready_since:
+                ready_since = time.time()
+            if time.time() - ready_since >= 0.75:
+                if os.name == "nt":
+                    command = process_command(proc.pid)
+                    if command and not command_matches_state(command, expected_state):
+                        break
+                return
+        else:
+            ready_since = 0.0
         time.sleep(0.25)
+    if proc.poll() is None and ready_before_start:
+        try:
+            log_path.write_text(
+                log_path.read_text(encoding="utf-8", errors="ignore")
+                + f"\nMountpoint {mountpoint} already existed before this mount attempt.\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
     if proc.poll() is None:
         proc.terminate()
         time.sleep(0.5)
@@ -690,6 +729,15 @@ def current_log_path(server: dict) -> Path:
 def display_mountpoint(server: dict) -> str:
     mountpoint = current_mountpoint(server)
     return mountpoint if mountpoint else "Auto"
+
+
+def display_mountpoint_for_status(server: dict, status: str) -> str:
+    configured = server.get("mountpoint") or ""
+    if status == "mounted":
+        return display_mountpoint(server)
+    if configured and configured.lower() != "auto":
+        return configured
+    return "Auto"
 
 
 def format_capacity_bytes(size: int) -> str:
@@ -1008,8 +1056,10 @@ def mount_server(server: dict, rclone: str) -> dict:
         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     )
+    expected_state = {"remote": remote, "mountpoint": mountpoint, "log": str(log_path)}
+    mountpoint_existed = mountpoint_ready(mountpoint)
     proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
-    wait_for_mount_ready(proc, mountpoint, log_path)
+    wait_for_mount_ready(proc, mountpoint, log_path, expected_state, ready_before_start=mountpoint_existed)
     state = {"pid": proc.pid, "server_id": server["id"], "remote": remote, "mountpoint": mountpoint, "log": str(log_path), "rc_addr": rc_addr}
     (state_dir / f"{server['id']}.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
     return state
@@ -1285,7 +1335,7 @@ class App:
 
         mid = Frame(row, bg=row_bg)
         mid.pack(side=LEFT, fill=BOTH, expand=True)
-        drive = display_mountpoint(server)
+        drive = display_mountpoint_for_status(server, status)
         capacity = capacity or {}
         if mounted and capacity:
             capacity_label = self.t(
@@ -1315,7 +1365,7 @@ class App:
             self.icon_button(actions, text, tooltip, command, enabled=enabled).grid(row=index // 2, column=index % 2, padx=2, pady=2)
 
     def icon_button(self, parent, text: str, tooltip: str, command, *, enabled: bool = True):
-        button = Button(parent, text=text, width=2, height=1, command=command, font=("Segoe UI Emoji", 12))
+        button = Button(parent, text=text, width=3, height=1, command=command, font=("Segoe UI Emoji", 14))
         if not enabled:
             button.configure(fg="#777777", command=lambda: None)
         Tooltip(button, tooltip)
