@@ -90,6 +90,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
@@ -99,6 +100,11 @@ jobs:
           fi
 
           mapfile -t FILES < <(find release-assets -type f | sort)
-          gh release create "$TAG" "${FILES[@]}" \
-            --title "SSH MountMate ${TAG}" \
-            --notes "Cross-platform Python build of SSH MountMate."
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${FILES[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "${FILES[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "SSH MountMate ${TAG}" \
+              --notes "Cross-platform Python build of SSH MountMate."
+          fi
