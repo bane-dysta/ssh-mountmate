@@ -1773,11 +1773,13 @@ class App:
         Label(mid, text=f"{server.get('user', '')}@{server.get('host', '')}", bg=row_bg, fg=muted, font=(font_family, 10), wraplength=text_wrap, justify=RIGHT).pack(anchor="e", fill=X)
         Label(mid, text=server.get("remote_path") or "~", bg=row_bg, fg=muted, font=(font_family, 10), wraplength=text_wrap, justify=RIGHT).pack(anchor="e", fill=X)
 
+        can_change_mount = not self.batch_operation_running
+        mount_tooltip = self.t("batch_busy") if self.batch_operation_running else self.t("unmount") if mounted else self.t("mount")
         buttons = [
-            ("■" if mounted else "▶", self.t("unmount") if mounted else self.t("mount"), lambda s=server: self.toggle_mount(s), True),
+            ("■" if mounted else "▶", mount_tooltip, lambda s=server: self.toggle_mount(s), can_change_mount),
             ("📂", self.t("open_folder"), lambda s=server: self.open_folder(s), mounted),
-            ("✎", self.t("edit_mounted_disabled") if mounted else self.t("edit_mount"), lambda s=server: self.edit_server(s), not mounted),
-            ("🗑", self.t("delete_config"), lambda s=server: self.delete_server(s), not mounted),
+            ("✎", self.t("edit_mounted_disabled") if mounted else self.t("edit_mount"), lambda s=server: self.edit_server(s), not mounted and can_change_mount),
+            ("🗑", self.t("delete_config"), lambda s=server: self.delete_server(s), not mounted and can_change_mount),
         ]
         columns = self.card_action_columns
         for index, (text, tooltip, command, enabled) in enumerate(buttons):
@@ -2145,6 +2147,7 @@ class App:
         rclone = self.current_rclone()
         self.batch_operation_running = True
         self.update_batch_buttons()
+        self.refresh_list()
 
         def worker() -> None:
             errors: list[str] = []
@@ -2226,6 +2229,9 @@ class App:
             self.refresh_mount_status_async()
 
     def toggle_mount(self, server: dict) -> None:
+        if self.batch_operation_running:
+            self.status.set(self.t("batch_busy"))
+            return
         if verified_mount_status(server) == "mounted":
             try:
                 unmount_server(server)
