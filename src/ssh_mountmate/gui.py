@@ -23,6 +23,7 @@ from . import VERSION
 from . import core as rsshmount
 from .notices import THIRD_PARTY_NOTICES
 from .rclone import augment_process_path, install_managed_rclone, managed_rclone_path, manual_install_text
+from .updates import check_for_updates, format_update_info
 
 
 APP_TITLE = "SSH MountMate"
@@ -36,8 +37,9 @@ LANGUAGE_CHOICES = {"auto": "Auto", "en": "English", "zh": "中文"}
 FONT_FAMILY_EN = "Segoe UI"
 FONT_FAMILY_ZH = "Noto Sans CJK SC"
 RCLONE_CONFIG_LOCK = threading.RLock()
-MOUNT_ALL_WORKERS = 3
-UNMOUNT_ALL_WORKERS = 5
+DEFAULT_MOUNT_ALL_WORKERS = 4
+DEFAULT_UNMOUNT_ALL_WORKERS = 8
+BATCH_WORKER_CHOICES = ["1", "2", "3", "4", "6", "8", "10", "12"]
 HOME_MOUNTPOINT_VALUE = "__home_mnt__"
 TEXT = {
     "en": {
@@ -59,6 +61,9 @@ TEXT = {
         "checking_deps": "Checking dependencies...",
         "check_dependencies": "Check dependencies",
         "install_missing_dependencies": "Install missing dependencies",
+        "check_updates": "Check for updates",
+        "checking_updates": "Checking for updates...",
+        "update_check_failed": "Update check failed",
         "view_mount_logs": "View mount logs",
         "view_licenses": "View licenses",
         "missing_dependencies": "Missing dependencies: {items}. Install or show instructions now?",
@@ -73,6 +78,8 @@ TEXT = {
         "write_back": "Write-back delay",
         "dir_cache_time": "Directory cache",
         "buffer_size": "Buffer size",
+        "mount_workers": "Mount concurrency",
+        "unmount_workers": "Unmount concurrency",
         "language_help": "Auto uses Chinese on Chinese systems and English otherwise.",
         "cache_root_help": "Local folder used by rclone VFS cache. Put it on a fast disk with enough free space.",
         "vfs_cache_mode_help": "Controls local file caching. Higher modes improve app compatibility but use more disk.",
@@ -82,10 +89,14 @@ TEXT = {
         "write_back_help": "Delay before changed files are written back to the server. Longer delays can smooth frequent small writes.",
         "dir_cache_time_help": "How long rclone keeps remote directory listings. Shorter values see server-side changes sooner but browse slower.",
         "buffer_size_help": "Memory read buffer per open file. Larger values can improve sequential reads but use more RAM.",
+        "mount_workers_help": "Maximum number of configs mounted in parallel during Mount all. Higher values are faster but can trigger SSH rate limits.",
+        "unmount_workers_help": "Maximum number of configs unmounted in parallel during Unmount all. Higher values are usually safe but can make errors arrive together.",
         "startup_all_help": "Creates or removes Windows logon tasks for all saved configs.",
         "dependency_help": "Checks dependencies. rclone is bundled in releases; Windows system dependencies use winget/system tools. macOS/Linux system dependencies show copyable commands.",
+        "updates_help": "Checks the latest SSH MountMate release on GitHub and shows the matching download for this platform.",
         "logs_help": "Open recent rclone mount logs for a saved config. Useful for diagnosing failed mounts.",
         "licenses_help": "Show bundled third-party notices and license text.",
+        "updates_title": "SSH MountMate updates",
         "startup_all": "Mount all configs on Windows login",
         "language": "Language",
         "save_settings": "Save settings",
@@ -127,6 +138,7 @@ TEXT = {
         "source": "Source",
         "ssh_config": "SSH config",
         "ssh_config_batch": "SSH config (batch)",
+        "sai_cluster": "SAI cluster",
         "ssh_config_file": "SSH config file",
         "browse": "Browse",
         "preview": "Preview",
@@ -146,6 +158,10 @@ TEXT = {
         "rclone_native": "rclone native SFTP",
         "openssh": "OpenSSH",
         "openssh_help": "OpenSSH uses your system ssh command. Add passphrase-protected keys to ssh-agent first; saved key passphrases are not used in this mode.",
+        "write_ssh_config": "Write SSH config",
+        "copy_key_to_ssh_dir": "Copy key to ~/.ssh",
+        "ssh_config_write_help": "Creates an app-managed Host entry under ~/.ssh/ssh-mountmate.d and includes it from ~/.ssh/config. Passwords and key passphrases are never written there.",
+        "copy_key_help": "Copies the selected private key into ~/.ssh and writes the copied path to SSH config and this mount profile.",
         "key": "Key",
         "password_auth": "Password",
         "key_file": "Key file",
@@ -154,6 +170,8 @@ TEXT = {
         "remote_path": "Remote path",
         "mountpoint": "Mountpoint",
         "home_mountpoint": "User folder (~/mnt/name)",
+        "mountpoint_help": "Use Auto, a drive letter on Windows, or a custom absolute folder. macOS/Linux folders are created if missing. Windows folder mountpoints need an existing parent and a non-existing target folder.",
+        "invalid_mountpoint": "Invalid mountpoint: {reason}",
         "save": "Save",
         "cancel": "Cancel",
         "name_required": "Name is required.",
@@ -179,6 +197,9 @@ TEXT = {
         "checking_deps": "正在检查依赖...",
         "check_dependencies": "检查依赖",
         "install_missing_dependencies": "安装缺失依赖",
+        "check_updates": "检查程序更新",
+        "checking_updates": "正在检查程序更新...",
+        "update_check_failed": "检查更新失败",
         "view_mount_logs": "查看挂载日志",
         "view_licenses": "查看许可证",
         "missing_dependencies": "缺少依赖：{items}。现在安装或显示安装说明吗？",
@@ -193,6 +214,8 @@ TEXT = {
         "write_back": "写回延迟",
         "dir_cache_time": "目录缓存",
         "buffer_size": "读取缓冲",
+        "mount_workers": "挂载并行数",
+        "unmount_workers": "取消挂载并行数",
         "language_help": "自动模式会在中文系统使用中文，其他系统使用英文。",
         "cache_root_help": "rclone VFS 本地缓存目录。建议放在速度较快且空间充足的磁盘。",
         "vfs_cache_mode_help": "控制本地文件缓存方式。模式越高，应用兼容性通常越好，但会占用更多磁盘。",
@@ -202,10 +225,14 @@ TEXT = {
         "write_back_help": "文件变更后延迟多久写回服务器。更长延迟可缓解频繁小写入带来的抖动。",
         "dir_cache_time_help": "rclone 保留远程目录列表的时间。越短越容易看到服务器端变化，但浏览会更频繁访问服务器。",
         "buffer_size_help": "每个打开文件使用的内存读取缓冲。更大可能改善顺序读取，但会占用更多内存。",
+        "mount_workers_help": "批量挂载时最多同时处理多少个配置。更大更快，但可能触发 SSH 连接限制。",
+        "unmount_workers_help": "批量取消挂载时最多同时处理多少个配置。通常可以比挂载更高，但错误可能集中出现。",
         "startup_all_help": "为全部已保存配置创建或删除 Windows 登录挂载任务。",
         "dependency_help": "检查依赖。Release 内置 rclone；Windows 系统依赖使用 winget/系统工具；macOS/Linux 系统依赖会显示可复制命令。",
+        "updates_help": "检查 GitHub Releases 上的最新 SSH MountMate，并显示当前平台匹配的下载包。",
         "logs_help": "打开某个已保存配置最近的 rclone 挂载日志，用于排查挂载失败。",
         "licenses_help": "查看内置第三方声明和许可证文本。",
+        "updates_title": "SSH MountMate 更新",
         "startup_all": "Windows 登录时挂载全部配置",
         "language": "语言",
         "save_settings": "保存设置",
@@ -247,6 +274,7 @@ TEXT = {
         "source": "来源",
         "ssh_config": "SSH 配置",
         "ssh_config_batch": "SSH 配置（批量）",
+        "sai_cluster": "SAI 集群",
         "ssh_config_file": "SSH 配置文件",
         "browse": "浏览",
         "preview": "预览",
@@ -266,6 +294,10 @@ TEXT = {
         "rclone_native": "rclone 原生 SFTP",
         "openssh": "OpenSSH",
         "openssh_help": "OpenSSH 会使用系统 ssh 命令。带短语的密钥请先加入 ssh-agent；此模式不会使用已保存的密钥短语。",
+        "write_ssh_config": "写入 SSH config",
+        "copy_key_to_ssh_dir": "复制密钥到 ~/.ssh",
+        "ssh_config_write_help": "在 ~/.ssh/ssh-mountmate.d 下创建由应用管理的 Host，并从 ~/.ssh/config Include。密码和密钥短语不会写入 SSH config。",
+        "copy_key_help": "把选中的私钥复制到 ~/.ssh，并把复制后的路径写入 SSH config 和当前挂载配置。",
         "key": "密钥",
         "password_auth": "密码",
         "key_file": "密钥文件",
@@ -274,6 +306,8 @@ TEXT = {
         "remote_path": "远程路径",
         "mountpoint": "挂载点",
         "home_mountpoint": "用户文件夹 (~/mnt/名称)",
+        "mountpoint_help": "可以使用 Auto、Windows 盘符，或自定义绝对路径文件夹。macOS/Linux 文件夹不存在时会创建；Windows 文件夹挂载要求父目录已存在，目标文件夹本身不能已存在。",
+        "invalid_mountpoint": "挂载点无效：{reason}",
         "save": "保存",
         "cancel": "取消",
         "name_required": "名称必填。",
@@ -303,6 +337,8 @@ def default_settings() -> dict:
         "vfs_write_back": "",
         "dir_cache_time": "",
         "buffer_size": "",
+        "mount_all_workers": DEFAULT_MOUNT_ALL_WORKERS,
+        "unmount_all_workers": DEFAULT_UNMOUNT_ALL_WORKERS,
         "startup_all": False,
         "language": "auto",
     }
@@ -336,6 +372,20 @@ def setting_to_choice(value: str, default_choice: str) -> str:
 
 def choice_to_setting(value: str) -> str:
     return "" if value.startswith("default ") else value
+
+
+def bounded_int(value, default: int, minimum: int = 1, maximum: int = 12) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, number))
+
+
+def setting_worker_choice(value, default: int) -> str:
+    number = bounded_int(value, default)
+    text = str(number)
+    return text if text in BATCH_WORKER_CHOICES else str(default)
 
 
 def system_language() -> str:
@@ -574,6 +624,158 @@ def list_ssh_config_host_entries(config_path: str | Path | None = None, seen: se
                 if "*" not in host and "?" not in host and "!" not in host:
                     entries.append({"host": host, "path": config, "line": line_no, "raw": raw_line})
     return entries
+
+
+def user_ssh_dir() -> Path:
+    return Path.home() / ".ssh"
+
+
+def managed_ssh_config_dir() -> Path:
+    return user_ssh_dir() / "ssh-mountmate.d"
+
+
+def ssh_config_include_line() -> str:
+    return "Include ~/.ssh/ssh-mountmate.d/*.conf"
+
+
+def ensure_user_ssh_dir() -> Path:
+    ssh_dir = user_ssh_dir()
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        try:
+            ssh_dir.chmod(0o700)
+        except OSError:
+            pass
+    return ssh_dir
+
+
+def ensure_managed_ssh_include() -> None:
+    ssh_dir = ensure_user_ssh_dir()
+    managed_ssh_config_dir().mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        try:
+            managed_ssh_config_dir().chmod(0o700)
+        except OSError:
+            pass
+    config = ssh_dir / "config"
+    include = ssh_config_include_line()
+    if config.exists():
+        text = config.read_text(encoding="utf-8", errors="ignore")
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.lower() == include.lower():
+                return
+        prefix = "" if text.endswith(("\n", "\r")) or not text else "\n"
+        config.write_text(f"{text}{prefix}{include}\n", encoding="utf-8")
+    else:
+        config.write_text(f"{include}\n", encoding="utf-8")
+    if os.name != "nt":
+        try:
+            config.chmod(0o600)
+        except OSError:
+            pass
+
+
+def ssh_safe_name(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in (value or "").strip())
+    return cleaned.strip("._-") or f"host-{uuid.uuid4().hex[:8]}"
+
+
+def managed_ssh_config_file(host_alias: str) -> Path:
+    return managed_ssh_config_dir() / f"{ssh_safe_name(host_alias)}.conf"
+
+
+def shell_home_path(path: Path) -> str:
+    try:
+        relative = path.expanduser().resolve().relative_to(Path.home().resolve())
+        return "~/" + relative.as_posix()
+    except Exception:
+        return path.expanduser().as_posix()
+
+
+def ssh_config_quote(value: str) -> str:
+    text = str(value)
+    if not text:
+        return '""'
+    if any(ch.isspace() for ch in text) or '"' in text or "\\" in text:
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return text
+
+
+def copy_key_to_user_ssh(source: str, host_alias: str) -> str:
+    source_path = Path(source).expanduser()
+    if not source_path.exists() or not source_path.is_file():
+        raise RuntimeError(f"Key file not found: {source}")
+    if source_path.suffix == ".pub":
+        raise RuntimeError("Select the private key file, not the .pub public key file.")
+    ssh_dir = ensure_user_ssh_dir()
+    base = ssh_safe_name(host_alias)
+    suffix = source_path.suffix
+    target = ssh_dir / f"{base}{suffix}"
+    if source_path.resolve() == target.resolve():
+        return str(target)
+    if target.exists():
+        for index in range(2, 1000):
+            candidate = ssh_dir / f"{base}-{index}{suffix}"
+            if not candidate.exists():
+                target = candidate
+                break
+        else:
+            target = ssh_dir / f"{base}-{uuid.uuid4().hex[:8]}{suffix}"
+    shutil.copy2(source_path, target)
+    if os.name != "nt":
+        try:
+            target.chmod(0o600)
+        except OSError:
+            pass
+    return str(target)
+
+
+def write_managed_ssh_config(server: dict) -> Path:
+    host_alias = str(server.get("host_alias") or server.get("name") or server.get("id") or "").strip()
+    if not host_alias:
+        raise RuntimeError("SSH Host is required to write SSH config.")
+    host = str(server.get("host") or "").strip()
+    user = str(server.get("user") or "").strip()
+    if not host or not user:
+        raise RuntimeError("IP/Host and user are required to write SSH config.")
+    ensure_managed_ssh_include()
+    target = managed_ssh_config_file(host_alias)
+    lines = [
+        "# Managed by SSH MountMate. Edit from the app when possible.",
+        f"Host {ssh_config_quote(host_alias)}",
+        f"    HostName {ssh_config_quote(host)}",
+        f"    User {ssh_config_quote(user)}",
+        f"    Port {ssh_config_quote(str(server.get('port') or '22'))}",
+    ]
+    key_file = str(server.get("key_file") or "").strip()
+    if key_file:
+        lines.append(f"    IdentityFile {ssh_config_quote(shell_home_path(Path(key_file)))}")
+        lines.append("    IdentitiesOnly yes")
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if os.name != "nt":
+        try:
+            target.chmod(0o600)
+        except OSError:
+            pass
+    return target
+
+
+def remove_managed_ssh_config(server: dict) -> None:
+    path_value = str(server.get("managed_ssh_config_path") or "")
+    candidates: list[Path] = []
+    if path_value:
+        candidates.append(Path(path_value).expanduser())
+    if server.get("host_alias"):
+        candidates.append(managed_ssh_config_file(str(server["host_alias"])))
+    managed_root = managed_ssh_config_dir().resolve()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+            if resolved.parent == managed_root and resolved.exists():
+                resolved.unlink()
+        except OSError:
+            pass
 
 
 def save_servers(servers: list[dict]) -> None:
@@ -885,25 +1087,20 @@ def resolve_mountpoint(server: dict) -> str:
         if os.name != "nt":
             return str(rsshmount.home_mountpoint(mountpoint_folder_name(server)))
         return str(rsshmount.default_mountpoint(remote_name(server)))
-    return configured_mountpoint
+    if is_windows_mount_drive(configured_mountpoint):
+        return configured_mountpoint
+    return str(Path(configured_mountpoint).expanduser())
 
 
 def prepare_gui_mountpoint(mountpoint: str) -> None:
     path = Path(mountpoint).expanduser()
     value = str(path)
+    error = validate_mountpoint_for_mount(value)
+    if error:
+        raise RuntimeError(f"Invalid mountpoint: {error}")
     if os.name == "nt":
         if value == "*" or rsshmount.is_windows_drive(value):
             return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            try:
-                is_empty_dir = path.is_dir() and not any(path.iterdir())
-            except OSError:
-                is_empty_dir = False
-            if is_empty_dir:
-                path.rmdir()
-            else:
-                raise RuntimeError(f"Windows directory mountpoint must not already exist: {path}")
         return
     path.mkdir(parents=True, exist_ok=True)
 
@@ -1097,6 +1294,61 @@ def mountpoint_choice_to_value(value: str, lang: str) -> str:
     return text
 
 
+def is_custom_mountpoint(value: str) -> bool:
+    text = (value or "").strip()
+    return bool(text and text.lower() != "auto" and text != HOME_MOUNTPOINT_VALUE)
+
+
+def is_absolute_or_home_path(value: str) -> bool:
+    text = (value or "").strip()
+    if text.startswith(("~/", "~\\")):
+        return True
+    return Path(text).expanduser().is_absolute()
+
+
+def is_windows_mount_drive(value: str) -> bool:
+    return os.name == "nt" and rsshmount.is_windows_drive(str(value).strip())
+
+
+def validate_mountpoint_for_save(value: str) -> str:
+    text = (value or "").strip()
+    if not is_custom_mountpoint(text):
+        return ""
+    if is_windows_mount_drive(text):
+        return ""
+    if not is_absolute_or_home_path(text):
+        return "custom mountpoint must be an absolute path or start with ~"
+    return ""
+
+
+def validate_mountpoint_for_mount(mountpoint: str) -> str:
+    value = str(mountpoint or "").strip()
+    if not value:
+        return "mountpoint is empty"
+    if os.name == "nt":
+        if value == "*" or rsshmount.is_windows_drive(value):
+            if rsshmount.is_windows_drive(value) and rsshmount.windows_drive_in_use(value):
+                return f"Windows drive is already in use: {value}"
+            return ""
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            return "Windows folder mountpoint must be an absolute path"
+        if not path.parent.exists():
+            return f"Windows folder mountpoint parent does not exist: {path.parent}"
+        if path.exists():
+            return f"Windows folder mountpoint target must not already exist: {path}"
+        return ""
+
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        return "custom mountpoint must be an absolute path or start with ~"
+    if path.exists() and not path.is_dir():
+        return f"mountpoint exists but is not a folder: {path}"
+    if path.is_mount():
+        return f"mountpoint is already mounted: {path}"
+    return ""
+
+
 def ssh_config_defaults(host_alias: str, config_path: str | Path | None = None) -> dict:
     if not host_alias:
         return {}
@@ -1109,6 +1361,29 @@ def ssh_config_defaults(host_alias: str, config_path: str | Path | None = None) 
         "user": rsshmount.first_ssh_value(config, "user", ""),
         "port": rsshmount.first_ssh_value(config, "port", "22"),
         "key_file": key_file,
+    }
+
+
+def sai_profile_name(user: str) -> str:
+    user = str(user or "").strip()
+    return f"SAI-{user}" if user else "SAI"
+
+
+def sai_cluster_defaults(user: str = "") -> dict:
+    name = sai_profile_name(user)
+    return {
+        "name": name,
+        "host_alias": name,
+        "host": "c1.sai.ai-4s.com",
+        "user": str(user or "").strip(),
+        "port": "12022",
+        "auth": "key",
+        "key_file": "",
+        "connection_method": "native",
+        "remote_path": "",
+        "mountpoint": HOME_MOUNTPOINT_VALUE,
+        "ssh_config_managed": True,
+        "copy_key_to_ssh_dir": True,
     }
 
 
@@ -1472,7 +1747,7 @@ def obscure_password(rclone: str, password: str) -> str:
 
 def ssh_command_for_server(server: dict) -> str:
     parts = ["ssh", "-o", "BatchMode=yes"]
-    if server.get("source") == "ssh_config" and server.get("host_alias"):
+    if (server.get("source") == "ssh_config" or server.get("ssh_config_managed")) and server.get("host_alias"):
         parts.append(str(server["host_alias"]))
         return " ".join(shlex.quote(part) for part in parts)
 
@@ -1657,7 +1932,7 @@ def unmount_server_locked(server: dict) -> None:
     errors: list[str] = []
     commands: list[list[str]]
     if sys.platform == "darwin":
-        commands = [["umount", mountpoint], ["diskutil", "unmount", mountpoint]]
+        commands = [["umount", mountpoint], ["diskutil", "unmount", mountpoint], ["diskutil", "unmount", "force", mountpoint]]
     else:
         commands = []
         for tool in ("fusermount3", "fusermount"):
@@ -1679,6 +1954,11 @@ def unmount_server_locked(server: dict) -> None:
         errors.append(f"{' '.join(command)} exited {result.returncode}\n{output}".strip())
 
     if not unmounted:
+        if sys.platform == "darwin":
+            errors.append(
+                "The mountpoint is still busy. Close files, terminals, editors, and Finder windows using it, then retry.\n"
+                f"To inspect holders, run: lsof +D {shlex.quote(str(mountpoint))}"
+            )
         raise RuntimeError("Failed to unmount mountpoint.\n" + "\n\n".join(errors))
 
     time.sleep(0.5)
@@ -1771,6 +2051,7 @@ class App:
         self.configs_loaded = False
         self.status_refreshing = False
         self.dependency_checking = False
+        self.update_checking = False
         self.mount_status_cache: dict[str, str] = {}
         self.capacity_cache: dict[str, dict] = {}
         self.refresh_generation = 0
@@ -2136,7 +2417,7 @@ class App:
         settings = load_settings()
         window = Toplevel(self.root)
         window.title(self.t("settings"))
-        window.geometry("560x640")
+        window.geometry("560x700")
         frame = Frame(window, padx=14, pady=14)
         frame.pack(fill=BOTH, expand=True)
         Label(frame, textvariable=self.dep_status, anchor="w", justify=LEFT).pack(fill=X, pady=(0, 12))
@@ -2144,6 +2425,8 @@ class App:
         deps_check_button.pack(fill=X, pady=3)
         deps_install_button = Button(frame, text=self.t("install_missing_dependencies"), command=self.install_deps_async)
         deps_install_button.pack(fill=X, pady=3)
+        updates_button = Button(frame, text=self.t("check_updates"), command=self.check_updates_async)
+        updates_button.pack(fill=X, pady=3)
         logs_button = Button(frame, text=self.t("view_mount_logs"), command=self.open_logs)
         logs_button.pack(fill=X, pady=3)
         licenses_button = Button(frame, text=self.t("view_licenses"), command=lambda: self.show_text_window(self.t("view_licenses"), THIRD_PARTY_NOTICES))
@@ -2159,6 +2442,8 @@ class App:
         write_back = StringVar(value=setting_to_choice(settings.get("vfs_write_back", ""), WRITE_BACK_CHOICES[0]))
         dir_cache_time = StringVar(value=setting_to_choice(settings.get("dir_cache_time", ""), DIR_CACHE_TIME_CHOICES[0]))
         buffer_size = StringVar(value=setting_to_choice(settings.get("buffer_size", ""), BUFFER_SIZE_CHOICES[0]))
+        mount_workers = StringVar(value=setting_worker_choice(settings.get("mount_all_workers"), DEFAULT_MOUNT_ALL_WORKERS))
+        unmount_workers = StringVar(value=setting_worker_choice(settings.get("unmount_all_workers"), DEFAULT_UNMOUNT_ALL_WORKERS))
         startup_all = BooleanVar(value=bool(settings.get("startup_all", False)))
         language = StringVar(value=language_choice_from_setting(settings.get("language", "auto")))
 
@@ -2167,6 +2452,7 @@ class App:
 
         attach_help(deps_check_button, "dependency_help")
         attach_help(deps_install_button, "dependency_help")
+        attach_help(updates_button, "updates_help")
         attach_help(logs_button, "logs_help")
         attach_help(licenses_button, "licenses_help")
 
@@ -2252,6 +2538,24 @@ class App:
         attach_help(buffer_label, "buffer_size_help")
         attach_help(buffer_combo, "buffer_size_help")
 
+        mount_workers_row = Frame(frame)
+        mount_workers_row.pack(fill=X, pady=3)
+        mount_workers_label = Label(mount_workers_row, text=self.t("mount_workers"), width=16, anchor="w")
+        mount_workers_label.pack(side=LEFT)
+        mount_workers_combo = ttk.Combobox(mount_workers_row, values=BATCH_WORKER_CHOICES, textvariable=mount_workers, state="readonly")
+        mount_workers_combo.pack(side=LEFT, fill=X, expand=True)
+        attach_help(mount_workers_label, "mount_workers_help")
+        attach_help(mount_workers_combo, "mount_workers_help")
+
+        unmount_workers_row = Frame(frame)
+        unmount_workers_row.pack(fill=X, pady=3)
+        unmount_workers_label = Label(unmount_workers_row, text=self.t("unmount_workers"), width=16, anchor="w")
+        unmount_workers_label.pack(side=LEFT)
+        unmount_workers_combo = ttk.Combobox(unmount_workers_row, values=BATCH_WORKER_CHOICES, textvariable=unmount_workers, state="readonly")
+        unmount_workers_combo.pack(side=LEFT, fill=X, expand=True)
+        attach_help(unmount_workers_label, "unmount_workers_help")
+        attach_help(unmount_workers_combo, "unmount_workers_help")
+
         startup_check = Checkbutton(frame, text=self.t("startup_all"), variable=startup_all)
         startup_check.pack(anchor="w", pady=8)
         attach_help(startup_check, "startup_all_help")
@@ -2268,6 +2572,8 @@ class App:
                     "vfs_write_back": choice_to_setting(write_back.get().strip()),
                     "dir_cache_time": choice_to_setting(dir_cache_time.get().strip()),
                     "buffer_size": choice_to_setting(buffer_size.get().strip()),
+                    "mount_all_workers": bounded_int(mount_workers.get(), DEFAULT_MOUNT_ALL_WORKERS),
+                    "unmount_all_workers": bounded_int(unmount_workers.get(), DEFAULT_UNMOUNT_ALL_WORKERS),
                     "startup_all": bool(startup_all.get()),
                     "language": language_setting_from_choice(language.get()),
                 }
@@ -2335,6 +2641,32 @@ class App:
 
     def on_dependency_install_failed(self, message: str) -> None:
         self.status.set(self.t("deps_failed"))
+        self.show_error(message)
+
+    def check_updates_async(self) -> None:
+        if self.update_checking:
+            return
+        self.update_checking = True
+        self.status.set(self.t("checking_updates"))
+        threading.Thread(target=self.check_updates, daemon=True).start()
+
+    def check_updates(self) -> None:
+        try:
+            info = check_for_updates(VERSION)
+            content = format_update_info(info, language=self.lang)
+            self.root.after(0, lambda: self.on_update_check_done(content))
+        except Exception as exc:
+            message = f"{self.t('update_check_failed')}: {exc}"
+            self.root.after(0, lambda: self.on_update_check_failed(message))
+
+    def on_update_check_done(self, content: str) -> None:
+        self.update_checking = False
+        self.status.set(self.t("ready"))
+        self.show_text_window(self.t("updates_title"), content)
+
+    def on_update_check_failed(self, message: str) -> None:
+        self.update_checking = False
+        self.status.set(self.t("update_check_failed"))
         self.show_error(message)
 
     def show_text_window(self, title: str, content: str) -> None:
@@ -2482,10 +2814,14 @@ class App:
         threading.Thread(target=worker, daemon=True).start()
 
     def mount_all(self) -> None:
-        self.run_batch_operation("mount", MOUNT_ALL_WORKERS, "mount_all_started")
+        settings = load_settings()
+        workers = bounded_int(settings.get("mount_all_workers"), DEFAULT_MOUNT_ALL_WORKERS)
+        self.run_batch_operation("mount", workers, "mount_all_started")
 
     def unmount_all(self) -> None:
-        self.run_batch_operation("unmount", UNMOUNT_ALL_WORKERS, "unmount_all_started")
+        settings = load_settings()
+        workers = bounded_int(settings.get("unmount_all_workers"), DEFAULT_UNMOUNT_ALL_WORKERS)
+        self.run_batch_operation("unmount", workers, "unmount_all_started")
 
     def finish_single_operation(self, server: dict, message: str = "", error: str = "") -> None:
         self.release_server_operation(server)
@@ -2535,6 +2871,7 @@ class App:
         dialog = ServerDialog(self.root, rclone=self.current_rclone(), existing=server, lang=self.lang)
         self.root.wait_window(dialog.window)
         if dialog.result:
+            old_server = dict(server)
             result = dialog.result
             used_names: set[str] = set()
             used_mount_folders: set[str] = set()
@@ -2542,6 +2879,11 @@ class App:
                 if existing_index != index:
                     add_used_server_name(server_name_base(existing_server), used_names, used_mount_folders)
             result["name"] = make_unique_server_name(server_name_base(result), used_names, used_mount_folders)
+            if old_server.get("ssh_config_managed") and (
+                not result.get("ssh_config_managed")
+                or str(old_server.get("managed_ssh_config_path") or "") != str(result.get("managed_ssh_config_path") or "")
+            ):
+                remove_managed_ssh_config(old_server)
             self.servers[index] = result
             save_servers(self.servers)
             self.refresh_list()
@@ -2614,6 +2956,8 @@ class App:
             disable_startup(server)
         except Exception:
             pass
+        if server.get("ssh_config_managed"):
+            remove_managed_ssh_config(server)
         save_servers(self.servers)
         self.status.set(self.t("deleted", name=name))
         self.refresh_list()
@@ -2638,7 +2982,10 @@ class ServerDialog:
         self.source = StringVar(value=existing_source or "ssh_config")
         self.auth = StringVar(value=self.existing.get("auth", "key"))
         self.connection_method = StringVar(value=connection_method_value(self.existing))
+        self.write_ssh_config = BooleanVar(value=bool(self.existing.get("ssh_config_managed", False)))
+        self.copy_key_to_ssh = BooleanVar(value=bool(self.existing.get("copy_key_to_ssh_dir", False)))
         self.values: dict[str, Entry] = {}
+        self.last_sai_profile_name = sai_profile_name(self.existing.get("user", ""))
         self.batch_config_path = StringVar(value=str(Path.home() / ".ssh" / "config"))
         self.window = Toplevel(root)
         self.window.title(self.t("edit_config_title") if existing else self.t("add_config_title"))
@@ -2718,6 +3065,7 @@ class ServerDialog:
         ttk.Radiobutton(source_frame, text=self.t("ssh_config"), variable=self.source, value="ssh_config", command=self.on_source_changed).pack(side=LEFT)
         if not self.existing:
             ttk.Radiobutton(source_frame, text=self.t("ssh_config_batch"), variable=self.source, value="ssh_config_batch", command=self.on_source_changed).pack(side=LEFT)
+        ttk.Radiobutton(source_frame, text=self.t("sai_cluster"), variable=self.source, value="sai_cluster", command=self.on_source_changed).pack(side=LEFT)
         ttk.Radiobutton(source_frame, text=self.t("manual"), variable=self.source, value="manual", command=self.on_source_changed).pack(side=LEFT)
 
         self.single_frame = Frame(self.form)
@@ -2730,21 +3078,33 @@ class ServerDialog:
 
         self.row(self.t("name"), "name", self.existing.get("name", ""), parent=self.single_frame)
         self.row(self.t("ip_host"), "host", self.existing.get("host", ""), parent=self.single_frame)
-        self.row(self.t("user"), "user", self.existing.get("user", ""), parent=self.single_frame)
+        user_entry = self.row(self.t("user"), "user", self.existing.get("user", ""), parent=self.single_frame)
+        user_entry.bind("<KeyRelease>", self.on_sai_user_changed)
+        user_entry.bind("<FocusOut>", self.on_sai_user_changed)
         self.row(self.t("port"), "port", str(self.existing.get("port") or "22"), parent=self.single_frame)
 
         auth_frame = Frame(self.single_frame, padx=10, pady=4)
         auth_frame.pack(fill=X)
         Label(auth_frame, text=self.t("auth"), width=14, anchor="w").pack(side=LEFT)
         self.auth_buttons = [
-            ttk.Radiobutton(auth_frame, text=self.t("key"), variable=self.auth, value="key"),
-            ttk.Radiobutton(auth_frame, text=self.t("password_auth"), variable=self.auth, value="password"),
+            ttk.Radiobutton(auth_frame, text=self.t("key"), variable=self.auth, value="key", command=self.update_connection_method_controls),
+            ttk.Radiobutton(auth_frame, text=self.t("password_auth"), variable=self.auth, value="password", command=self.update_connection_method_controls),
         ]
         for button in self.auth_buttons:
             button.pack(side=LEFT)
         self.row(self.t("key_file"), "key_file", self.existing.get("key_file", ""), browse=True, parent=self.single_frame)
         self.row(self.t("key_passphrase"), "key_passphrase", secret=True, parent=self.single_frame)
         self.row(self.t("password"), "password", secret=True, parent=self.single_frame)
+
+        ssh_write_frame = Frame(self.single_frame, padx=10, pady=4)
+        ssh_write_frame.pack(fill=X)
+        Label(ssh_write_frame, text="", width=14, anchor="w").pack(side=LEFT)
+        self.write_ssh_config_check = Checkbutton(ssh_write_frame, text=self.t("write_ssh_config"), variable=self.write_ssh_config, command=self.update_source_controls)
+        self.write_ssh_config_check.pack(side=LEFT)
+        self.copy_key_check = Checkbutton(ssh_write_frame, text=self.t("copy_key_to_ssh_dir"), variable=self.copy_key_to_ssh, command=self.update_connection_method_controls)
+        self.copy_key_check.pack(side=LEFT, padx=(12, 0))
+        Tooltip(self.write_ssh_config_check, self.t("ssh_config_write_help"))
+        Tooltip(self.copy_key_check, self.t("copy_key_help"))
 
         method_frame = Frame(self.single_frame, padx=10, pady=4)
         method_frame.pack(fill=X)
@@ -2754,13 +3114,14 @@ class ServerDialog:
         self.connection_help = Label(self.single_frame, text=self.t("openssh_help"), fg="#666666", wraplength=520, justify=LEFT)
 
         self.row_remote_path(self.existing.get("remote_path", ""), parent=self.single_frame)
-        self.row_combo(
+        mountpoint_combo = self.row_combo(
             self.t("mountpoint"),
             "mountpoint",
             mountpoint_choices(self.lang),
             mountpoint_value_to_choice(self.existing.get("mountpoint", ""), self.lang),
             parent=self.single_frame,
         )
+        Tooltip(mountpoint_combo, self.t("mountpoint_help"))
 
         self.build_batch_frame()
 
@@ -2774,6 +3135,8 @@ class ServerDialog:
         self.update_connection_method_controls()
         if self.source.get() == "ssh_config" and not self.existing and host_default:
             self.apply_ssh_defaults(host_default)
+        if self.source.get() == "sai_cluster" and not self.existing:
+            self.apply_sai_defaults()
         self.bind_mousewheel_recursive(self.form)
 
     def build_batch_frame(self) -> None:
@@ -2874,7 +3237,8 @@ class ServerDialog:
         entry.insert(0, value or "")
 
     def update_source_controls(self) -> None:
-        batch = self.source.get() == "ssh_config_batch"
+        source = self.source.get()
+        batch = source == "ssh_config_batch"
         if batch:
             self.single_frame.pack_forget()
             self.batch_frame.pack(fill=BOTH, expand=True, before=self.buttons_frame)
@@ -2883,8 +3247,22 @@ class ServerDialog:
             self.batch_frame.pack_forget()
             self.single_frame.pack(fill=X)
             self.save_button.configure(text=self.t("save"))
-        state = "readonly" if self.source.get() == "ssh_config" else "disabled"
+        if source == "ssh_config":
+            state = "readonly"
+            ssh_config_state = "disabled"
+        elif source == "ssh_config_batch":
+            state = "disabled"
+            ssh_config_state = "disabled"
+        else:
+            state = "normal"
+            ssh_config_state = "normal"
         self.host_combo.configure(state=state)
+        for widget in (getattr(self, "write_ssh_config_check", None), getattr(self, "copy_key_check", None)):
+            if widget:
+                try:
+                    widget.configure(state=ssh_config_state)
+                except Exception:
+                    pass
         self.update_connection_method_controls()
 
     def update_connection_method_controls(self) -> None:
@@ -2911,11 +3289,21 @@ class ServerDialog:
                 button.configure(state=auth_state)
             except Exception:
                 pass
+        copy_state = "normal"
+        if self.source.get() in {"ssh_config", "ssh_config_batch"} or self.auth.get() != "key":
+            copy_state = "disabled"
+        if getattr(self, "copy_key_check", None):
+            try:
+                self.copy_key_check.configure(state=copy_state)
+            except Exception:
+                pass
 
     def on_source_changed(self) -> None:
         self.update_source_controls()
         if self.source.get() == "ssh_config" and self.get("host_alias"):
             self.apply_ssh_defaults(self.get("host_alias"))
+        elif self.source.get() == "sai_cluster":
+            self.apply_sai_defaults()
 
     def on_ssh_host_selected(self, _event=None) -> None:
         self.apply_ssh_defaults(self.get("host_alias"))
@@ -2929,6 +3317,32 @@ class ServerDialog:
         for key in ["name", "host", "user", "port", "key_file"]:
             self.set_value(key, defaults.get(key, ""))
         self.auth.set("key" if defaults.get("key_file") else self.auth.get())
+
+    def apply_sai_defaults(self) -> None:
+        defaults = sai_cluster_defaults(self.get("user"))
+        for key in ["name", "host_alias", "host", "user", "port", "key_file"]:
+            self.set_value(key, defaults.get(key, ""))
+        self.auth.set(defaults["auth"])
+        self.connection_method.set(defaults["connection_method"])
+        self.write_ssh_config.set(True)
+        self.copy_key_to_ssh.set(True)
+        base, suffix = split_remote_path(defaults["remote_path"])
+        self.set_value("remote_base", base)
+        self.set_value("remote_suffix", suffix)
+        self.set_value("mountpoint", mountpoint_value_to_choice(defaults["mountpoint"], self.lang))
+        self.last_sai_profile_name = defaults["name"]
+        self.update_connection_method_controls()
+
+    def on_sai_user_changed(self, _event=None) -> None:
+        if self.source.get() != "sai_cluster":
+            return
+        name = sai_profile_name(self.get("user"))
+        old_name = self.last_sai_profile_name
+        for key in ("name", "host_alias"):
+            current = self.get(key)
+            if current in {"", "SAI", old_name} or current.startswith("SAI-"):
+                self.set_value(key, name)
+        self.last_sai_profile_name = name
 
     def save(self) -> None:
         source = self.source.get()
@@ -2957,16 +3371,30 @@ class ServerDialog:
         if not host or not user:
             messagebox.showerror(APP_TITLE, self.t("host_user_required"))
             return
+        if source == "sai_cluster":
+            sai_name = sai_profile_name(user)
+            if name in {"", "SAI"} or str(name).startswith("SAI-"):
+                name = sai_name
 
         server_id = self.existing.get("id") or "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)
         mountpoint = mountpoint_choice_to_value(self.get("mountpoint"), self.lang)
+        mountpoint_error = validate_mountpoint_for_save(mountpoint)
+        if mountpoint_error:
+            messagebox.showerror(APP_TITLE, self.t("invalid_mountpoint", reason=mountpoint_error))
+            return
+        ssh_config_managed = bool(self.write_ssh_config.get() and source not in {"ssh_config", "ssh_config_batch"})
+        host_alias = self.get("host_alias")
+        if source == "sai_cluster" and user and (not host_alias or host_alias == "SAI" or str(host_alias).startswith("SAI-")):
+            host_alias = sai_profile_name(user)
+        if ssh_config_managed and not host_alias:
+            host_alias = ssh_safe_name(name)
 
         result = {
             "id": server_id,
             "name": name,
             "mode": "manual",
             "source": source,
-            "host_alias": self.get("host_alias") if source == "ssh_config" else "",
+            "host_alias": host_alias if source == "ssh_config" or ssh_config_managed else "",
             "host": host,
             "user": user,
             "port": self.get("port") or "22",
@@ -2976,7 +3404,16 @@ class ServerDialog:
             "remote_path": compose_remote_path(self.get("remote_base"), self.get("remote_suffix")),
             "mountpoint": mountpoint,
             "cache_mode": self.existing.get("cache_mode", ""),
+            "ssh_config_managed": ssh_config_managed,
+            "copy_key_to_ssh_dir": bool(self.copy_key_to_ssh.get() and ssh_config_managed and self.auth.get() == "key"),
         }
+
+        if result["copy_key_to_ssh_dir"] and result.get("key_file"):
+            try:
+                result["key_file"] = copy_key_to_user_ssh(result["key_file"], result["host_alias"] or result["name"])
+            except Exception as exc:
+                messagebox.showerror(APP_TITLE, str(exc))
+                return
 
         if self.connection_method.get() == "openssh":
             result["auth"] = "key"
@@ -3003,6 +3440,13 @@ class ServerDialog:
                     return
             elif self.existing.get("key_pass_obscured") and same_key_passphrase_target(self.existing, result):
                 result["key_pass_obscured"] = self.existing["key_pass_obscured"]
+        if result["ssh_config_managed"]:
+            try:
+                managed_config = write_managed_ssh_config(result)
+                result["managed_ssh_config_path"] = str(managed_config)
+            except Exception as exc:
+                messagebox.showerror(APP_TITLE, str(exc))
+                return
         self.result = result
         self.window.destroy()
 
@@ -3012,6 +3456,7 @@ def main() -> int:
     parser.add_argument("--version", action="version", version=f"{APP_TITLE} {VERSION}")
     parser.add_argument("--install-help", action="store_true", help="Print manual dependency install commands and exit.")
     parser.add_argument("--licenses", action="store_true", help="Print bundled third-party notices and licenses and exit.")
+    parser.add_argument("--check-update", action="store_true", help="Check the latest GitHub release and exit.")
     parser.add_argument("--mount-id")
     args = parser.parse_args()
     if args.install_help:
@@ -3020,6 +3465,13 @@ def main() -> int:
     if args.licenses:
         print(THIRD_PARTY_NOTICES)
         return 0
+    if args.check_update:
+        try:
+            print(format_update_info(check_for_updates(VERSION)))
+            return 0
+        except Exception as exc:
+            print(f"Update check failed: {exc}", file=sys.stderr)
+            return 1
     if args.mount_id:
         return headless_mount(args.mount_id)
     root = Tk()
