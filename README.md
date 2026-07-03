@@ -99,6 +99,8 @@ sudo zypper install -y fuse3 openssh
 
 </details>
 
+In the Settings window, `Check dependencies` shows the current mount-layer dependency as `WinFsp`, `macFUSE`, or `FUSE`. If macOS/Linux system dependencies are missing, `Install missing dependencies` opens copyable commands instead of trying to modify the system silently.
+
 ## Bundled And Managed rclone
 
 Release builds bundle rclone inside the executable. During build, SSH MountMate downloads the official rclone zip for the build runner's platform and CPU architecture and embeds the extracted binary with PyInstaller.
@@ -381,6 +383,8 @@ sudo zypper install -y fuse3 openssh
 ```
 
 </details>
+
+Settings 页面里的 `检查依赖` 会按当前平台显示挂载层依赖：`WinFsp`、`macFUSE` 或 `FUSE`。如果 macOS/Linux 缺系统级依赖，`安装缺失依赖` 会打开可复制命令，而不是静默修改系统。
 
 ## 内置和托管 rclone
 

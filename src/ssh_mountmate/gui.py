@@ -59,8 +59,8 @@ TEXT = {
         "check_dependencies": "Check dependencies",
         "install_missing_dependencies": "Install missing dependencies",
         "view_mount_logs": "View mount logs",
-        "missing_dependencies": "Missing dependencies: {items}. Install now?",
-        "deps_status": "rclone: {rclone}    WinFsp: {winfsp}    ssh: {ssh}",
+        "missing_dependencies": "Missing dependencies: {items}. Install or show instructions now?",
+        "deps_status": "rclone: {rclone}    {mount_dep}: {mount}    ssh: {ssh}",
         "ok": "ok",
         "missing": "missing",
         "cache_root": "Cache root",
@@ -81,7 +81,7 @@ TEXT = {
         "dir_cache_time_help": "How long rclone keeps remote directory listings. Shorter values see server-side changes sooner but browse slower.",
         "buffer_size_help": "Memory read buffer per open file. Larger values can improve sequential reads but use more RAM.",
         "startup_all_help": "Creates or removes Windows logon tasks for all saved configs.",
-        "dependency_help": "Checks dependencies. rclone can be downloaded as an official managed zip; Windows system dependencies use winget/system tools. Manual commands are shown if installation fails.",
+        "dependency_help": "Checks dependencies. rclone is bundled in releases; Windows system dependencies use winget/system tools. macOS/Linux system dependencies show copyable commands.",
         "logs_help": "Open recent rclone mount logs for a saved config. Useful for diagnosing failed mounts.",
         "startup_all": "Mount all configs on Windows login",
         "language": "Language",
@@ -177,8 +177,8 @@ TEXT = {
         "check_dependencies": "检查依赖",
         "install_missing_dependencies": "安装缺失依赖",
         "view_mount_logs": "查看挂载日志",
-        "missing_dependencies": "缺少依赖：{items}。现在安装吗？",
-        "deps_status": "rclone：{rclone}    WinFsp：{winfsp}    ssh：{ssh}",
+        "missing_dependencies": "缺少依赖：{items}。现在安装或显示安装说明吗？",
+        "deps_status": "rclone：{rclone}    {mount_dep}：{mount}    ssh：{ssh}",
         "ok": "正常",
         "missing": "缺失",
         "cache_root": "缓存目录",
@@ -199,7 +199,7 @@ TEXT = {
         "dir_cache_time_help": "rclone 保留远程目录列表的时间。越短越容易看到服务器端变化，但浏览会更频繁访问服务器。",
         "buffer_size_help": "每个打开文件使用的内存读取缓冲。更大可能改善顺序读取，但会占用更多内存。",
         "startup_all_help": "为全部已保存配置创建或删除 Windows 登录挂载任务。",
-        "dependency_help": "检查依赖。rclone 可下载官方 zip 作为应用托管版本；Windows 系统依赖使用 winget/系统工具。安装失败时会显示手动命令。",
+        "dependency_help": "检查依赖。Release 内置 rclone；Windows 系统依赖使用 winget/系统工具；macOS/Linux 系统依赖会显示可复制命令。",
         "logs_help": "打开某个已保存配置最近的 rclone 挂载日志，用于排查挂载失败。",
         "startup_all": "Windows 登录时挂载全部配置",
         "language": "语言",
@@ -1262,6 +1262,57 @@ def winfsp_installed() -> bool:
     return rsshmount.find_winfsp() is not None
 
 
+def macfuse_installed() -> bool:
+    if sys.platform != "darwin":
+        return False
+    candidates = [
+        Path("/Library/Filesystems/macfuse.fs"),
+        Path("/Library/Filesystems/osxfuse.fs"),
+        Path("/usr/local/lib/libfuse.dylib"),
+        Path("/opt/homebrew/lib/libfuse.dylib"),
+    ]
+    if any(path.exists() for path in candidates):
+        return True
+    try:
+        result = subprocess.run(
+            ["pkgutil", "--pkgs"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=3,
+        )
+    except Exception:
+        return False
+    return any("macfuse" in line.lower() or "osxfuse" in line.lower() for line in result.stdout.splitlines())
+
+
+def linux_fuse_installed() -> bool:
+    if sys.platform != "linux":
+        return False
+    return (shutil.which("fusermount3") is not None or shutil.which("fusermount") is not None) and Path("/dev/fuse").exists()
+
+
+def mount_dependency_label() -> str:
+    if os.name == "nt":
+        return "WinFsp"
+    if sys.platform == "darwin":
+        return "macFUSE"
+    if sys.platform == "linux":
+        return "FUSE"
+    return "Mount deps"
+
+
+def mount_dependency_installed() -> bool:
+    if os.name == "nt":
+        return winfsp_installed()
+    if sys.platform == "darwin":
+        return macfuse_installed()
+    if sys.platform == "linux":
+        return linux_fuse_installed()
+    return True
+
+
 def ssh_installed() -> bool:
     return shutil.which("ssh") is not None
 
@@ -2043,25 +2094,27 @@ class App:
     def check_dependencies(self) -> None:
         rclone_path = resolve_rclone_path()
         rclone_ok = bool(rclone_path)
-        winfsp_ok = winfsp_installed() if os.name == "nt" else True
+        mount_dep = mount_dependency_label()
+        mount_ok = mount_dependency_installed()
         ssh_ok = ssh_installed()
         missing = []
         if not rclone_ok:
             missing.append("rclone")
-        if not winfsp_ok:
-            missing.append("WinFsp")
+        if not mount_ok:
+            missing.append(mount_dep)
         if not ssh_ok:
             missing.append("OpenSSH")
-        self.root.after(0, lambda: self.apply_dependency_result(rclone_path, rclone_ok, winfsp_ok, ssh_ok, missing))
+        self.root.after(0, lambda: self.apply_dependency_result(rclone_path, rclone_ok, mount_dep, mount_ok, ssh_ok, missing))
 
-    def apply_dependency_result(self, rclone_path: str, rclone_ok: bool, winfsp_ok: bool, ssh_ok: bool, missing: list[str]) -> None:
+    def apply_dependency_result(self, rclone_path: str, rclone_ok: bool, mount_dep: str, mount_ok: bool, ssh_ok: bool, missing: list[str]) -> None:
         self.dependency_checking = False
         self.rclone = rclone_path
         self.dep_status.set(
             self.t(
                 "deps_status",
                 rclone=self.t("ok") if rclone_ok else self.t("missing"),
-                winfsp=self.t("ok") if winfsp_ok else self.t("missing"),
+                mount_dep=mount_dep,
+                mount=self.t("ok") if mount_ok else self.t("missing"),
                 ssh=self.t("ok") if ssh_ok else self.t("missing"),
             )
         )
@@ -2253,6 +2306,14 @@ class App:
                 install_winfsp()
             if os.name == "nt" and not ssh_installed():
                 install_openssh_client()
+            if os.name != "nt":
+                manual_missing = []
+                if not mount_dependency_installed():
+                    manual_missing.append(mount_dependency_label())
+                if not ssh_installed():
+                    manual_missing.append("OpenSSH")
+                if manual_missing:
+                    raise RuntimeError("Manual installation is required for: " + ", ".join(manual_missing) + "\n\n" + manual_install_text())
             rclone_path = resolve_rclone_path()
             self.root.after(0, lambda: self.on_dependency_install_done(rclone_path))
         except Exception as exc:

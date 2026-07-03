@@ -299,6 +299,9 @@ def manual_install_commands() -> dict[str, list[str]]:
             "macFUSE:",
             "Install macFUSE with Homebrew Cask: brew install --cask macfuse",
             "If macFUSE asks for approval, enable it in System Settings -> Privacy & Security, then retry.",
+            "",
+            "OpenSSH Client:",
+            "OpenSSH is normally included with macOS. If ssh is missing, run: xcode-select --install",
         ],
         "Linux": linux_commands,
     }
