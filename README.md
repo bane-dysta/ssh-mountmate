@@ -108,10 +108,13 @@ The remote server is assumed to be a Linux server reachable over SSH/SFTP.
 Use the latest GitHub Release and download the package for your platform:
 
 - `SSHMountMate-windows-x64.zip`
-- `SSHMountMate-macos-arm64-x64.zip`
+- `SSHMountMate-macos-x64.zip`
+- `SSHMountMate-macos-arm64.zip`
 - `SSHMountMate-linux-x64.zip`
 
 Release builds are produced by GitHub Actions from the same Python source tree.
+
+Use `SSHMountMate-macos-x64.zip` for Intel Macs and `SSHMountMate-macos-arm64.zip` for Apple Silicon Macs.
 
 ## Quick Start
 
@@ -364,10 +367,13 @@ https://downloads.rclone.org/rclone-current-<platform>-<arch>.zip
 在 GitHub Release 中下载对应平台的包：
 
 - `SSHMountMate-windows-x64.zip`
-- `SSHMountMate-macos-arm64-x64.zip`
+- `SSHMountMate-macos-x64.zip`
+- `SSHMountMate-macos-arm64.zip`
 - `SSHMountMate-linux-x64.zip`
 
 这些发布包由 GitHub Actions 从同一份 Python 代码构建。
+
+Intel Mac 请下载 `SSHMountMate-macos-x64.zip`，Apple Silicon Mac 请下载 `SSHMountMate-macos-arm64.zip`。
 
 ## 快速开始
 

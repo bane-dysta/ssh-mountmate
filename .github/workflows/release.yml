@@ -22,8 +22,10 @@ jobs:
         include:
           - os: windows-latest
             asset: SSHMountMate-windows-x64.zip
-          - os: macos-latest
-            asset: SSHMountMate-macos-arm64-x64.zip
+          - os: macos-13
+            asset: SSHMountMate-macos-x64.zip
+          - os: macos-14
+            asset: SSHMountMate-macos-arm64.zip
           - os: ubuntu-latest
             asset: SSHMountMate-linux-x64.zip
     runs-on: ${{ matrix.os }}
