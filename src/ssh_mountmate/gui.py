@@ -177,6 +177,14 @@ TEXT = {
         "cancel": "Cancel",
         "name_required": "Name is required.",
         "host_user_required": "IP/Host and user are required.",
+        "field_required": "{field} is required.",
+        "port_invalid": "Port must be a number from 1 to 65535.",
+        "ssh_host_required": "SSH Host is required before writing SSH config.",
+        "ssh_host_invalid": "SSH Host can only contain letters, numbers, dots, underscores, hyphens, and colons.",
+        "key_file_required": "Select a private key file before copying it to ~/.ssh.",
+        "key_file_not_found": "Key file not found: {path}",
+        "private_key_required": "Select the private key file, not the .pub public key file.",
+        "duplicate_target": "A config for the same IP/Host, user, and port already exists: {name}",
         "password_required": "Password is required.",
     },
     "zh": {
@@ -313,6 +321,14 @@ TEXT = {
         "cancel": "取消",
         "name_required": "名称必填。",
         "host_user_required": "IP/主机和用户名必填。",
+        "field_required": "{field}必填。",
+        "port_invalid": "端口必须是 1 到 65535 之间的数字。",
+        "ssh_host_required": "写入 SSH config 前必须填写 SSH Host。",
+        "ssh_host_invalid": "SSH Host 只能包含字母、数字、点、下划线、短横线和冒号。",
+        "key_file_required": "复制密钥到 ~/.ssh 前必须选择私钥文件。",
+        "key_file_not_found": "找不到密钥文件：{path}",
+        "private_key_required": "请选择私钥文件，不要选择 .pub 公钥文件。",
+        "duplicate_target": "已存在相同 IP/主机、用户名和端口的配置：{name}",
         "password_required": "密码必填。",
     },
 }
@@ -703,12 +719,72 @@ def ssh_config_quote(value: str) -> str:
     return text
 
 
+def normalized_port(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("Port is required.")
+    if not text.isdigit():
+        raise ValueError("Port must be a number from 1 to 65535.")
+    port = int(text)
+    if port < 1 or port > 65535:
+        raise ValueError("Port must be a number from 1 to 65535.")
+    return str(port)
+
+
+def validate_ssh_host_alias(host_alias: str) -> str:
+    value = str(host_alias or "").strip()
+    if not value:
+        raise ValueError("SSH Host is required to write SSH config.")
+    if value != str(host_alias or ""):
+        raise ValueError("SSH Host must not start or end with whitespace.")
+    if any(ch.isspace() or ord(ch) < 32 for ch in value):
+        raise ValueError("SSH Host must not contain whitespace or control characters.")
+    if any(ch in value for ch in "*?!#\"'\\"):
+        raise ValueError("SSH Host must not contain wildcards, comments, quotes, or backslashes.")
+    if value.startswith("-"):
+        raise ValueError("SSH Host must not start with '-'.")
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", value):
+        raise ValueError("SSH Host can only contain letters, numbers, dots, underscores, hyphens, and colons.")
+    return value
+
+
+def validate_ssh_config_scalar(value: object, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field_name} is required to write SSH config.")
+    if any(ch.isspace() or ord(ch) < 32 for ch in text):
+        raise ValueError(f"{field_name} must not contain whitespace or control characters.")
+    if text.startswith("-"):
+        raise ValueError(f"{field_name} must not start with '-'.")
+    return text
+
+
+def validate_private_key_path(path_value: str) -> str:
+    text = str(path_value or "").strip()
+    if not text:
+        raise ValueError("Select a private key file before copying it to ~/.ssh.")
+    path = Path(text).expanduser()
+    if not path.exists() or not path.is_file():
+        raise ValueError(f"Key file not found: {text}")
+    if path.suffix == ".pub":
+        raise ValueError("Select the private key file, not the .pub public key file.")
+    return text
+
+
+def validate_managed_ssh_config_server(server: dict) -> dict:
+    host_alias = validate_ssh_host_alias(server.get("host_alias") or server.get("name") or server.get("id") or "")
+    host = validate_ssh_config_scalar(server.get("host"), "IP/Host")
+    user = validate_ssh_config_scalar(server.get("user"), "User")
+    port = normalized_port(server.get("port"))
+    key_file = str(server.get("key_file") or "").strip()
+    if key_file:
+        validate_private_key_path(key_file)
+    return {"host_alias": host_alias, "host": host, "user": user, "port": port, "key_file": key_file}
+
+
 def copy_key_to_user_ssh(source: str, host_alias: str) -> str:
+    source = validate_private_key_path(source)
     source_path = Path(source).expanduser()
-    if not source_path.exists() or not source_path.is_file():
-        raise RuntimeError(f"Key file not found: {source}")
-    if source_path.suffix == ".pub":
-        raise RuntimeError("Select the private key file, not the .pub public key file.")
     ssh_dir = ensure_user_ssh_dir()
     base = ssh_safe_name(host_alias)
     suffix = source_path.suffix
@@ -733,13 +809,11 @@ def copy_key_to_user_ssh(source: str, host_alias: str) -> str:
 
 
 def write_managed_ssh_config(server: dict) -> Path:
-    host_alias = str(server.get("host_alias") or server.get("name") or server.get("id") or "").strip()
-    if not host_alias:
-        raise RuntimeError("SSH Host is required to write SSH config.")
-    host = str(server.get("host") or "").strip()
-    user = str(server.get("user") or "").strip()
-    if not host or not user:
-        raise RuntimeError("IP/Host and user are required to write SSH config.")
+    validated = validate_managed_ssh_config_server(server)
+    host_alias = validated["host_alias"]
+    host = validated["host"]
+    user = validated["user"]
+    port = validated["port"]
     ensure_managed_ssh_include()
     target = managed_ssh_config_file(host_alias)
     lines = [
@@ -747,9 +821,9 @@ def write_managed_ssh_config(server: dict) -> Path:
         f"Host {ssh_config_quote(host_alias)}",
         f"    HostName {ssh_config_quote(host)}",
         f"    User {ssh_config_quote(user)}",
-        f"    Port {ssh_config_quote(str(server.get('port') or '22'))}",
+        f"    Port {ssh_config_quote(port)}",
     ]
-    key_file = str(server.get("key_file") or "").strip()
+    key_file = validated["key_file"]
     if key_file:
         lines.append(f"    IdentityFile {ssh_config_quote(shell_home_path(Path(key_file)))}")
         lines.append("    IdentitiesOnly yes")
@@ -1496,7 +1570,7 @@ def server_from_ssh_config_host(host_alias: str, config_path: str | Path | None 
     }
 
 
-def normalized_port(value) -> str:
+def normalized_target_port(value) -> str:
     text = str(value or "22").strip()
     return str(int(text)) if text.isdigit() else text
 
@@ -1509,7 +1583,15 @@ def target_fingerprint(server: dict) -> tuple[str, str, str]:
     return (
         str(server.get("host") or "").strip().casefold(),
         str(server.get("user") or "").strip(),
-        normalized_port(server.get("port")),
+        normalized_target_port(server.get("port")),
+    )
+
+
+def exact_connection_fingerprint(server: dict) -> tuple[str, str, str]:
+    return (
+        str(server.get("host") or "").strip(),
+        str(server.get("user") or "").strip(),
+        normalized_target_port(server.get("port")),
     )
 
 
@@ -2962,7 +3044,7 @@ class App:
             index = self.servers.index(server)
         except ValueError:
             return
-        dialog = ServerDialog(self.root, rclone=self.current_rclone(), existing=server, lang=self.lang)
+        dialog = ServerDialog(self.root, rclone=self.current_rclone(), existing=server, lang=self.lang, existing_servers=self.servers)
         self.root.wait_window(dialog.window)
         if dialog.result:
             old_server = dict(server)
@@ -3113,10 +3195,18 @@ class ServerDialog:
     def t(self, key: str, **kwargs) -> str:
         return tr_lang(self.lang, key, **kwargs)
 
-    def row(self, label: str, key: str, default: str = "", browse=False, secret=False, parent=None):
+    def label(self, parent, text: str, *, required: bool = False) -> None:
+        label_frame = Frame(parent, width=112)
+        label_frame.pack_propagate(False)
+        label_frame.pack(side=LEFT)
+        Label(label_frame, text=text, anchor="w").pack(side=LEFT)
+        if required:
+            Label(label_frame, text="*", fg="#d32f2f", anchor="w").pack(side=LEFT, padx=(2, 0))
+
+    def row(self, label: str, key: str, default: str = "", browse=False, secret=False, parent=None, required: bool = False):
         frame = Frame(parent or self.form, padx=10, pady=4)
         frame.pack(fill=X)
-        Label(frame, text=label, width=14, anchor="w").pack(side=LEFT)
+        self.label(frame, label, required=required)
         entry = Entry(frame, show="*" if secret else None)
         entry.insert(0, default)
         entry.pack(side=LEFT, fill=X, expand=True)
@@ -3125,10 +3215,10 @@ class ServerDialog:
             Button(frame, text="...", command=lambda: self.pick_file(key)).pack(side=RIGHT)
         return entry
 
-    def row_combo(self, label: str, key: str, values: list[str], default: str = "", parent=None):
+    def row_combo(self, label: str, key: str, values: list[str], default: str = "", parent=None, required: bool = False):
         frame = Frame(parent or self.form, padx=10, pady=4)
         frame.pack(fill=X)
-        Label(frame, text=label, width=14, anchor="w").pack(side=LEFT)
+        self.label(frame, label, required=required)
         combo = ttk.Combobox(frame, values=values)
         if default:
             combo.set(default)
@@ -3142,7 +3232,7 @@ class ServerDialog:
         base, suffix = split_remote_path(remote_path)
         frame = Frame(parent or self.form, padx=10, pady=4)
         frame.pack(fill=X)
-        Label(frame, text=self.t("remote_path"), width=14, anchor="w").pack(side=LEFT)
+        self.label(frame, self.t("remote_path"))
         combo = ttk.Combobox(frame, values=["$HOME", "/"], width=8, state="readonly")
         combo.set(base)
         combo.pack(side=LEFT)
@@ -3170,12 +3260,12 @@ class ServerDialog:
         self.host_combo = self.row_combo(self.t("ssh_host"), "host_alias", hosts, host_default, parent=self.single_frame)
         self.host_combo.bind("<<ComboboxSelected>>", self.on_ssh_host_selected)
 
-        self.row(self.t("name"), "name", self.existing.get("name", ""), parent=self.single_frame)
-        self.row(self.t("ip_host"), "host", self.existing.get("host", ""), parent=self.single_frame)
-        user_entry = self.row(self.t("user"), "user", self.existing.get("user", ""), parent=self.single_frame)
+        self.row(self.t("name"), "name", self.existing.get("name", ""), parent=self.single_frame, required=True)
+        self.row(self.t("ip_host"), "host", self.existing.get("host", ""), parent=self.single_frame, required=True)
+        user_entry = self.row(self.t("user"), "user", self.existing.get("user", ""), parent=self.single_frame, required=True)
         user_entry.bind("<KeyRelease>", self.on_sai_user_changed)
         user_entry.bind("<FocusOut>", self.on_sai_user_changed)
-        self.row(self.t("port"), "port", str(self.existing.get("port") or "22"), parent=self.single_frame)
+        self.row(self.t("port"), "port", str(self.existing.get("port") or "22"), parent=self.single_frame, required=True)
 
         auth_frame = Frame(self.single_frame, padx=10, pady=4)
         auth_frame.pack(fill=X)
@@ -3398,6 +3488,8 @@ class ServerDialog:
             self.apply_ssh_defaults(self.get("host_alias"))
         elif self.source.get() == "sai_cluster":
             self.apply_sai_defaults()
+        elif self.source.get() == "manual" and not self.existing:
+            self.apply_manual_defaults()
 
     def on_ssh_host_selected(self, _event=None) -> None:
         self.apply_ssh_defaults(self.get("host_alias"))
@@ -3413,18 +3505,31 @@ class ServerDialog:
         self.auth.set("key" if defaults.get("key_file") else self.auth.get())
 
     def apply_sai_defaults(self) -> None:
-        defaults = sai_cluster_defaults(self.get("user"))
+        defaults = sai_cluster_defaults("")
         for key in ["name", "host_alias", "host", "user", "port", "key_file"]:
             self.set_value(key, defaults.get(key, ""))
         self.auth.set(defaults["auth"])
         self.connection_method.set(defaults["connection_method"])
-        self.write_ssh_config.set(True)
-        self.copy_key_to_ssh.set(True)
+        self.write_ssh_config.set(False)
+        self.copy_key_to_ssh.set(False)
         base, suffix = split_remote_path(defaults["remote_path"])
         self.set_value("remote_base", base)
         self.set_value("remote_suffix", suffix)
         self.set_value("mountpoint", mountpoint_value_to_choice(defaults["mountpoint"], self.lang))
         self.last_sai_profile_name = defaults["name"]
+        self.update_connection_method_controls()
+
+    def apply_manual_defaults(self) -> None:
+        for key in ["name", "host_alias", "host", "user", "port", "key_file", "key_passphrase", "password"]:
+            self.set_value(key, "")
+        self.auth.set("key")
+        self.connection_method.set("native")
+        self.write_ssh_config.set(False)
+        self.copy_key_to_ssh.set(False)
+        base, suffix = split_remote_path("")
+        self.set_value("remote_base", base)
+        self.set_value("remote_suffix", suffix)
+        self.set_value("mountpoint", mountpoint_value_to_choice("", self.lang))
         self.update_connection_method_controls()
 
     def on_sai_user_changed(self, _event=None) -> None:
@@ -3437,6 +3542,35 @@ class ServerDialog:
             if current in {"", "SAI", old_name} or current.startswith("SAI-"):
                 self.set_value(key, name)
         self.last_sai_profile_name = name
+
+    def show_validation_error(self, message: str) -> None:
+        messagebox.showerror(APP_TITLE, message)
+
+    def validation_message(self, exc: Exception) -> str:
+        text = str(exc)
+        if text.startswith("SSH Host is required"):
+            return self.t("ssh_host_required")
+        if text.startswith("SSH Host"):
+            return self.t("ssh_host_invalid")
+        if text.startswith("Port"):
+            return self.t("port_invalid")
+        if text.startswith("Select a private key file before copying"):
+            return self.t("key_file_required")
+        if text.startswith("Select the private key file"):
+            return self.t("private_key_required")
+        if text.startswith("Key file not found:"):
+            return self.t("key_file_not_found", path=text.split(":", 1)[1].strip())
+        return text
+
+    def duplicate_target_name(self, result: dict) -> str:
+        current_id = str(self.existing.get("id") or "")
+        current_target = exact_connection_fingerprint(result)
+        for server in self.existing_servers:
+            if current_id and str(server.get("id") or "") == current_id:
+                continue
+            if exact_connection_fingerprint(server) == current_target:
+                return str(server.get("name") or server.get("host_alias") or server.get("id") or "")
+        return ""
 
     def save(self) -> None:
         source = self.source.get()
@@ -3456,14 +3590,22 @@ class ServerDialog:
             self.window.destroy()
             return
 
-        name = self.get("name") or self.get("host_alias") or self.get("host")
+        name = self.get("name")
         if not name:
-            messagebox.showerror(APP_TITLE, self.t("name_required"))
+            self.show_validation_error(self.t("field_required", field=self.t("name")))
             return
         host = self.get("host")
         user = self.get("user")
-        if not host or not user:
-            messagebox.showerror(APP_TITLE, self.t("host_user_required"))
+        if not host:
+            self.show_validation_error(self.t("field_required", field=self.t("ip_host")))
+            return
+        if not user:
+            self.show_validation_error(self.t("field_required", field=self.t("user")))
+            return
+        try:
+            port = normalized_port(self.get("port"))
+        except ValueError:
+            self.show_validation_error(self.t("port_invalid"))
             return
         if source == "sai_cluster":
             sai_name = sai_profile_name(user)
@@ -3491,7 +3633,7 @@ class ServerDialog:
             "host_alias": host_alias if source == "ssh_config" or ssh_config_managed else "",
             "host": host,
             "user": user,
-            "port": self.get("port") or "22",
+            "port": port,
             "auth": self.auth.get(),
             "key_file": self.get("key_file"),
             "connection_method": self.connection_method.get() or "native",
@@ -3502,11 +3644,25 @@ class ServerDialog:
             "copy_key_to_ssh_dir": bool(self.copy_key_to_ssh.get() and ssh_config_managed and self.auth.get() == "key"),
         }
 
+        duplicate_name = self.duplicate_target_name(result)
+        if duplicate_name:
+            self.show_validation_error(self.t("duplicate_target", name=duplicate_name))
+            return
+
+        if result["ssh_config_managed"]:
+            try:
+                validate_managed_ssh_config_server(result)
+            except Exception as exc:
+                self.show_validation_error(self.validation_message(exc))
+                return
+        if result["copy_key_to_ssh_dir"] and not result.get("key_file"):
+            self.show_validation_error(self.t("key_file_required"))
+            return
         if result["copy_key_to_ssh_dir"] and result.get("key_file"):
             try:
                 result["key_file"] = copy_key_to_user_ssh(result["key_file"], result["host_alias"] or result["name"])
             except Exception as exc:
-                messagebox.showerror(APP_TITLE, str(exc))
+                messagebox.showerror(APP_TITLE, self.validation_message(exc))
                 return
 
         if self.connection_method.get() == "openssh":
