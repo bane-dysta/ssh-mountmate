@@ -43,6 +43,14 @@ Important macOS note: do not use the Homebrew `rclone` package for mounting. Hom
 curl https://rclone.org/install.sh | sudo bash
 ```
 
+macFUSE is still required for mounting on macOS, and it can be installed with Homebrew Cask:
+
+```bash
+brew install --cask macfuse
+```
+
+After installing macFUSE, macOS may ask you to allow the system extension in `System Settings -> Privacy & Security`. Approve it if prompted, then retry the mount.
+
 If macOS blocks the downloaded app because it is not notarized, remove the quarantine attribute after unzipping:
 
 ```bash
@@ -250,6 +258,14 @@ macOS 重要提示：不要使用 Homebrew 安装的 `rclone` 做挂载。Homebr
 ```bash
 curl https://rclone.org/install.sh | sudo bash
 ```
+
+macOS 挂载仍然需要 macFUSE，macFUSE 可以直接用 Homebrew Cask 安装：
+
+```bash
+brew install --cask macfuse
+```
+
+安装 macFUSE 后，macOS 可能要求在 `System Settings -> Privacy & Security` 中允许系统扩展。如果出现提示，允许后再重新尝试挂载。
 
 如果 macOS 因为程序未公证而阻止打开，解压后可以移除 quarantine 属性：
 

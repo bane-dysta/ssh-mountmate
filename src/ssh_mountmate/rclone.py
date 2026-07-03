@@ -174,6 +174,8 @@ def manual_install_commands() -> dict[str, list[str]]:
             "Do not use the Homebrew rclone package for mounts; Homebrew rclone cannot run rclone mount on macOS.",
             "curl https://rclone.org/install.sh | sudo bash",
             f"Manual zip: {rclone_download_url(system='Darwin')}",
+            "Install macFUSE with Homebrew Cask: brew install --cask macfuse",
+            "If macFUSE asks for approval, enable it in System Settings -> Privacy & Security, then retry.",
         ],
         "Linux": [
             "curl https://rclone.org/install.sh | sudo bash",
