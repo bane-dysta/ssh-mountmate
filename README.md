@@ -37,6 +37,18 @@ macOS:
 - macFUSE
 - OpenSSH Client
 
+Important macOS note: do not use the Homebrew `rclone` package for mounting. Homebrew's rclone package cannot run `rclone mount` on macOS. Install the official rclone binary instead:
+
+```bash
+curl https://rclone.org/install.sh | sudo bash
+```
+
+If macOS blocks the downloaded app because it is not notarized, remove the quarantine attribute after unzipping:
+
+```bash
+sudo xattr -r -d com.apple.quarantine /path/to/SSHMountMate*
+```
+
 Linux:
 
 - rclone
@@ -232,6 +244,18 @@ macOS：
 - rclone
 - macFUSE
 - OpenSSH Client
+
+macOS 重要提示：不要使用 Homebrew 安装的 `rclone` 做挂载。Homebrew 版 rclone 在 macOS 上不能执行 `rclone mount`。请改用 rclone 官方二进制：
+
+```bash
+curl https://rclone.org/install.sh | sudo bash
+```
+
+如果 macOS 因为程序未公证而阻止打开，解压后可以移除 quarantine 属性：
+
+```bash
+sudo xattr -r -d com.apple.quarantine /path/to/SSHMountMate*
+```
 
 Linux：
 

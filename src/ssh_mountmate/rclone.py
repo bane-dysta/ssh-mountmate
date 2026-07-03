@@ -171,8 +171,8 @@ def manual_install_commands() -> dict[str, list[str]]:
             "Place rclone.exe on PATH or next to SSHMountMate.exe.",
         ],
         "macOS": [
-            "brew install rclone",
-            "or: curl https://rclone.org/install.sh | sudo bash",
+            "Do not use the Homebrew rclone package for mounts; Homebrew rclone cannot run rclone mount on macOS.",
+            "curl https://rclone.org/install.sh | sudo bash",
             f"Manual zip: {rclone_download_url(system='Darwin')}",
         ],
         "Linux": [
