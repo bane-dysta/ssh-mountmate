@@ -1570,7 +1570,8 @@ def unmount_server_locked(server: dict) -> None:
     if not state_file.exists():
         raise RuntimeError("This server is not recorded as mounted.")
     state = json.loads(state_file.read_text(encoding="utf-8"))
-    pid = str(state["pid"])
+    pid_int = int(state["pid"])
+    pid = str(pid_int)
     if os.name == "nt":
         command = running_rclone_processes().get(int(pid), "")
         if not command:
@@ -1579,12 +1580,53 @@ def unmount_server_locked(server: dict) -> None:
         if not command_matches_state(command, state):
             state_file.unlink(missing_ok=True)
             raise RuntimeError("Recorded PID no longer belongs to this mount. Removed stale state; the current rclone process was not stopped.")
-    elif not pid_is_running(int(pid)):
+        result = subprocess.run(["taskkill", "/PID", pid, "/T"], text=True, creationflags=create_no_window())
+        if result.returncode != 0:
+            run(["taskkill", "/PID", pid, "/T", "/F"])
         state_file.unlink(missing_ok=True)
         return
-    result = subprocess.run(["taskkill", "/PID", pid, "/T"], text=True, creationflags=create_no_window())
-    if result.returncode != 0:
-        run(["taskkill", "/PID", pid, "/T", "/F"])
+
+    if not pid_is_running(pid_int):
+        state_file.unlink(missing_ok=True)
+        return
+
+    mountpoint = state.get("mountpoint") or current_mountpoint(server)
+    errors: list[str] = []
+    commands: list[list[str]]
+    if sys.platform == "darwin":
+        commands = [["umount", mountpoint], ["diskutil", "unmount", mountpoint]]
+    else:
+        commands = []
+        for tool in ("fusermount3", "fusermount"):
+            if shutil.which(tool):
+                commands.append([tool, "-u", mountpoint])
+        commands.append(["umount", mountpoint])
+
+    unmounted = False
+    for command in commands:
+        try:
+            result = run(command, check=False, capture=True)
+        except OSError as exc:
+            errors.append(f"{command[0]}: {exc}")
+            continue
+        if result.returncode == 0:
+            unmounted = True
+            break
+        output = "\n".join(part for part in [result.stdout, result.stderr] if part)
+        errors.append(f"{' '.join(command)} exited {result.returncode}\n{output}".strip())
+
+    if not unmounted:
+        raise RuntimeError("Failed to unmount mountpoint.\n" + "\n\n".join(errors))
+
+    time.sleep(0.5)
+    if pid_is_running(pid_int):
+        try:
+            os.kill(pid_int, 15)
+            time.sleep(0.5)
+            if pid_is_running(pid_int):
+                os.kill(pid_int, 9)
+        except OSError:
+            pass
     state_file.unlink(missing_ok=True)
 
 
