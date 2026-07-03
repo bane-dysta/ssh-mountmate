@@ -21,6 +21,7 @@ from tkinter import ttk
 
 from . import VERSION
 from . import core as rsshmount
+from .notices import THIRD_PARTY_NOTICES
 from .rclone import augment_process_path, install_managed_rclone, managed_rclone_path, manual_install_text
 
 
@@ -59,6 +60,7 @@ TEXT = {
         "check_dependencies": "Check dependencies",
         "install_missing_dependencies": "Install missing dependencies",
         "view_mount_logs": "View mount logs",
+        "view_licenses": "View licenses",
         "missing_dependencies": "Missing dependencies: {items}. Install or show instructions now?",
         "deps_status": "rclone: {rclone}    {mount_dep}: {mount}    ssh: {ssh}",
         "ok": "ok",
@@ -83,6 +85,7 @@ TEXT = {
         "startup_all_help": "Creates or removes Windows logon tasks for all saved configs.",
         "dependency_help": "Checks dependencies. rclone is bundled in releases; Windows system dependencies use winget/system tools. macOS/Linux system dependencies show copyable commands.",
         "logs_help": "Open recent rclone mount logs for a saved config. Useful for diagnosing failed mounts.",
+        "licenses_help": "Show bundled third-party notices and license text.",
         "startup_all": "Mount all configs on Windows login",
         "language": "Language",
         "save_settings": "Save settings",
@@ -177,6 +180,7 @@ TEXT = {
         "check_dependencies": "检查依赖",
         "install_missing_dependencies": "安装缺失依赖",
         "view_mount_logs": "查看挂载日志",
+        "view_licenses": "查看许可证",
         "missing_dependencies": "缺少依赖：{items}。现在安装或显示安装说明吗？",
         "deps_status": "rclone：{rclone}    {mount_dep}：{mount}    ssh：{ssh}",
         "ok": "正常",
@@ -201,6 +205,7 @@ TEXT = {
         "startup_all_help": "为全部已保存配置创建或删除 Windows 登录挂载任务。",
         "dependency_help": "检查依赖。Release 内置 rclone；Windows 系统依赖使用 winget/系统工具；macOS/Linux 系统依赖会显示可复制命令。",
         "logs_help": "打开某个已保存配置最近的 rclone 挂载日志，用于排查挂载失败。",
+        "licenses_help": "查看内置第三方声明和许可证文本。",
         "startup_all": "Windows 登录时挂载全部配置",
         "language": "语言",
         "save_settings": "保存设置",
@@ -2141,6 +2146,8 @@ class App:
         deps_install_button.pack(fill=X, pady=3)
         logs_button = Button(frame, text=self.t("view_mount_logs"), command=self.open_logs)
         logs_button.pack(fill=X, pady=3)
+        licenses_button = Button(frame, text=self.t("view_licenses"), command=lambda: self.show_text_window(self.t("view_licenses"), THIRD_PARTY_NOTICES))
+        licenses_button.pack(fill=X, pady=3)
 
         ttk.Separator(frame).pack(fill=X, pady=12)
 
@@ -2161,6 +2168,7 @@ class App:
         attach_help(deps_check_button, "dependency_help")
         attach_help(deps_install_button, "dependency_help")
         attach_help(logs_button, "logs_help")
+        attach_help(licenses_button, "licenses_help")
 
         lang_row = Frame(frame)
         lang_row.pack(fill=X, pady=3)
@@ -3003,10 +3011,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", action="version", version=f"{APP_TITLE} {VERSION}")
     parser.add_argument("--install-help", action="store_true", help="Print manual dependency install commands and exit.")
+    parser.add_argument("--licenses", action="store_true", help="Print bundled third-party notices and licenses and exit.")
     parser.add_argument("--mount-id")
     args = parser.parse_args()
     if args.install_help:
         print(manual_install_text())
+        return 0
+    if args.licenses:
+        print(THIRD_PARTY_NOTICES)
         return 0
     if args.mount_id:
         return headless_mount(args.mount_id)

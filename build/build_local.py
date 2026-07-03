@@ -90,22 +90,12 @@ def prepare_rclone_binary(root: Path) -> Path:
     return rclone
 
 
-def copy_release_notices(root: Path, dist: Path) -> None:
-    notices = root / "THIRD_PARTY_NOTICES.md"
-    if notices.exists():
-        shutil.copy2(notices, dist / notices.name)
-    source_licenses = root / "licenses"
-    if source_licenses.exists():
-        target_licenses = dist / "licenses"
-        if target_licenses.exists():
-            shutil.rmtree(target_licenses)
-        shutil.copytree(source_licenses, target_licenses)
-
-
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     dist = root / "dist"
     work = root / "build" / "pyinstaller-work"
+    if dist.exists():
+        shutil.rmtree(dist)
     data_separator = ";" if sys.platform.startswith("win") else ":"
     assets = prepare_assets(root)
     rclone = prepare_rclone_binary(root)
@@ -129,10 +119,7 @@ def main() -> int:
         f"{rclone}{data_separator}bin",
         str(root / "launcher.py"),
     ]
-    result = subprocess.call(cmd)
-    if result == 0:
-        copy_release_notices(root, dist)
-    return result
+    return subprocess.call(cmd)
 
 
 if __name__ == "__main__":

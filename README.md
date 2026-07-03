@@ -128,6 +128,12 @@ Use the latest GitHub Release and download the package for your platform:
 
 Release builds are produced by GitHub Actions from the same Python source tree.
 
+Each release zip contains only the platform executable. Bundled third-party notices can be viewed from Settings or with:
+
+```bash
+SSHMountMate --licenses
+```
+
 Check CPU architecture:
 
 ```powershell
@@ -273,13 +279,14 @@ Useful checks:
 python -m py_compile $(find src build -name '*.py' -print) launcher.py
 python -m ssh_mountmate --version
 python -m ssh_mountmate --install-help
+python -m ssh_mountmate --licenses
 ```
 
 ## License
 
 SSH MountMate's application code is released under the MIT License. See `LICENSE`.
 
-Release builds bundle rclone. rclone is distributed under the MIT License. See `THIRD_PARTY_NOTICES.md` and `licenses/rclone-COPYING.txt`.
+Release builds bundle rclone. rclone is distributed under the MIT License. See `THIRD_PARTY_NOTICES.md`, `licenses/rclone-COPYING.txt`, or the in-app Settings -> View licenses window.
 
 The bundled Noto Sans CJK SC font is distributed under the SIL Open Font License. See `src/ssh_mountmate/assets/fonts/LICENSE-Noto-CJK.txt`.
 
@@ -412,6 +419,12 @@ https://downloads.rclone.org/rclone-current-<platform>-<arch>.zip
 - `SSHMountMate-linux-arm64.zip`
 
 这些发布包由 GitHub Actions 从同一份 Python 代码构建。
+
+每个 release zip 中只包含对应平台的可执行文件。内置第三方声明可以在 Settings 页面查看，或执行：
+
+```bash
+SSHMountMate --licenses
+```
 
 判断 CPU 架构：
 
@@ -558,12 +571,13 @@ python -m ssh_mountmate
 python -m py_compile $(find src build -name '*.py' -print) launcher.py
 python -m ssh_mountmate --version
 python -m ssh_mountmate --install-help
+python -m ssh_mountmate --licenses
 ```
 
 ## 授权
 
 SSH MountMate 的应用代码使用 MIT License，详见 `LICENSE`。
 
-Release 构建会内置 rclone。rclone 使用 MIT License，详见 `THIRD_PARTY_NOTICES.md` 和 `licenses/rclone-COPYING.txt`。
+Release 构建会内置 rclone。rclone 使用 MIT License，详见 `THIRD_PARTY_NOTICES.md`、`licenses/rclone-COPYING.txt`，或应用 Settings -> 查看许可证窗口。
 
 内置的 Noto Sans CJK SC 字体使用 SIL Open Font License，详见 `src/ssh_mountmate/assets/fonts/LICENSE-Noto-CJK.txt`。
