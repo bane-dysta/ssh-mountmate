@@ -253,6 +253,10 @@ For rclone SFTP remotes, the app maintains its own `known_hosts` file and refres
 
 If host key scanning is unavailable, the app falls back to the user's default OpenSSH `known_hosts` file.
 
+## Capacity Display
+
+For mounted connections, SSH MountMate shows used and total capacity on each card. On Lustre paths, it first tries to read the remote directory's project ID with `lfs project -d` and then reads project quota with `lfs quota -p`. If the path is not on Lustre, `lfs` is unavailable, or the project has no nonzero hard block limit, the app falls back to `rclone about`.
+
 ## Settings
 
 The Settings window contains:
@@ -574,6 +578,10 @@ SSH MountMate 会尽量启用 rclone 的 host key 校验。
 对于 rclone SFTP remote，程序会维护自己的 `known_hosts` 文件，并用 `ssh-keyscan` 按目标 host 和 port 刷新服务器返回的 host key。这可以避免一种常见情况：OpenSSH 可以连接，但用户 `~/.ssh/known_hosts` 里只保存了一种 key，rclone 选择了另一种 key 后拒绝连接。
 
 如果无法扫描 host key，程序会回退使用用户默认的 OpenSSH `known_hosts` 文件。
+
+## 容量显示
+
+对已挂载连接，SSH MountMate 会在连接卡片上显示已用容量和总容量。对于 Lustre 路径，程序会优先用 `lfs project -d` 读取远端目录的 project ID，再用 `lfs quota -p` 读取 project quota。如果路径不在 Lustre 上、远端没有 `lfs`，或该 project 没有非零 hard block limit，则回退使用 `rclone about`。
 
 ## 设置
 

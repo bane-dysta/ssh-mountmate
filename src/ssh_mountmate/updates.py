@@ -42,15 +42,42 @@ def version_tuple(value: str) -> tuple[int, ...]:
     return tuple(int(item) for item in numbers[:4])
 
 
+def version_key(value: str) -> tuple[int, int, int, int, int]:
+    text = value.strip().lower()
+    if text.startswith("v"):
+        text = text[1:]
+    match = re.match(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", text)
+    release = [0, 0, 0]
+    if match:
+        for index, group in enumerate(match.groups()):
+            if group is not None:
+                release[index] = int(group)
+    suffix = text[match.end():] if match else text
+    stage = 4
+    number = 0
+    pre_match = re.search(r"(dev|a|alpha|b|beta|rc|pre|preview)[.-]?(\d*)", suffix)
+    if pre_match:
+        label = pre_match.group(1)
+        stage = {
+            "dev": 0,
+            "a": 1,
+            "alpha": 1,
+            "b": 2,
+            "beta": 2,
+            "rc": 3,
+            "pre": 3,
+            "preview": 3,
+        }.get(label, 3)
+        number = int(pre_match.group(2) or "0")
+    return (release[0], release[1], release[2], stage, number)
+
+
 def compare_versions(left: str, right: str) -> int:
-    left_parts = version_tuple(left)
-    right_parts = version_tuple(right)
-    length = max(len(left_parts), len(right_parts), 1)
-    left_parts = left_parts + (0,) * (length - len(left_parts))
-    right_parts = right_parts + (0,) * (length - len(right_parts))
-    if left_parts < right_parts:
+    left_key = version_key(left)
+    right_key = version_key(right)
+    if left_key < right_key:
         return -1
-    if left_parts > right_parts:
+    if left_key > right_key:
         return 1
     return 0
 

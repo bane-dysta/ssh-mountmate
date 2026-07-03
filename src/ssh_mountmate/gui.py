@@ -5,6 +5,7 @@ import glob
 import json
 import locale
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -1219,9 +1220,96 @@ def format_capacity_bytes(size: int) -> str:
     return f"{size} B"
 
 
+def parse_lustre_project_line(output: str) -> int | None:
+    for line in output.splitlines():
+        match = re.match(r"\s*(\d+)\s+\S+\s+.+", line)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def parse_lustre_quota_kbytes(output: str) -> dict:
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("Disk ") or stripped.lower().startswith("filesystem"):
+            continue
+        parts = stripped.split()
+        if len(parts) < 4:
+            continue
+        try:
+            used_kb = int(parts[1])
+            quota_kb = int(parts[2])
+            limit_kb = int(parts[3])
+        except ValueError:
+            continue
+        _ = quota_kb
+        total_kb = limit_kb
+        if not total_kb:
+            return {}
+        used = max(used_kb, 0) * 1024
+        total = total_kb * 1024
+        percent = int(round((used / total) * 100)) if total else 0
+        return {"used": used, "total": total, "percent": max(0, min(percent, 100)), "source": "lustre_project_quota"}
+    return {}
+
+
+def remote_path_for_capacity(server: dict) -> str:
+    remote_path = str(server.get("remote_path") or "").strip()
+    return remote_path or "."
+
+
+def lustre_project_capacity_info(server: dict) -> dict:
+    if server.get("auth") == "password" and not (server.get("source") == "ssh_config" or server.get("ssh_config_managed")):
+        return {}
+    script = r'''
+set -eu
+target=${1:-.}
+if [ -z "$target" ]; then target=.; fi
+if ! command -v lfs >/dev/null 2>&1; then exit 0; fi
+if [ -d "$target" ]; then
+  resolved=$(cd "$target" 2>/dev/null && pwd -P) || exit 0
+else
+  resolved=$(readlink -f -- "$target" 2>/dev/null || printf '%s' "$target")
+fi
+df_out=$(df -P -T "$resolved" 2>/dev/null | awk 'NR==2 {print $2 "\t" $7}')
+fstype=${df_out%%	*}
+mountpoint=${df_out#*	}
+if [ "$fstype" != "lustre" ] || [ -z "$mountpoint" ]; then exit 0; fi
+project_out=$(lfs project -d "$resolved" 2>/dev/null || true)
+project_id=$(printf '%s\n' "$project_out" | awk 'NF >= 3 && $1 ~ /^[0-9]+$/ {print $1; exit}')
+if [ -z "$project_id" ]; then exit 0; fi
+quota_out=$(lfs quota -p "$project_id" "$resolved" 2>/dev/null || true)
+if ! printf '%s\n' "$quota_out" | awk 'NF >= 4 && $2 ~ /^[0-9]+$/ {found=1} END {exit !found}'; then
+  quota_out=$(lfs quota -p "$project_id" "$mountpoint" 2>/dev/null || true)
+fi
+printf 'SSH_MOUNTMATE_LUSTRE_PROJECT=%s\n' "$project_id"
+printf 'SSH_MOUNTMATE_LUSTRE_MOUNT=%s\n' "$mountpoint"
+printf '%s\n' "$quota_out"
+'''
+    try:
+        result = subprocess.run(
+            [*ssh_args_for_server(server, connect_timeout=8), "sh", "-s", "--", remote_path_for_capacity(server)],
+            input=script,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=12,
+            creationflags=create_no_window(),
+        )
+    except Exception:
+        return {}
+    if result.returncode != 0:
+        return {}
+    return parse_lustre_quota_kbytes(result.stdout)
+
+
 def capacity_info(server: dict, rclone: str, status: str | None = None) -> dict:
     if (status or verified_mount_status(server)) != "mounted":
         return {}
+    lustre_capacity = lustre_project_capacity_info(server)
+    if lustre_capacity:
+        return lustre_capacity
     state = current_state(server)
     remote = state.get("remote") or rsshmount.remote_spec(remote_name(server), server.get("remote_path") or "")
     try:
@@ -1746,10 +1834,16 @@ def obscure_password(rclone: str, password: str) -> str:
 
 
 def ssh_command_for_server(server: dict) -> str:
+    return " ".join(shlex.quote(part) for part in ssh_args_for_server(server))
+
+
+def ssh_args_for_server(server: dict, *, connect_timeout: int | None = None) -> list[str]:
     parts = ["ssh", "-o", "BatchMode=yes"]
+    if connect_timeout:
+        parts.extend(["-o", f"ConnectTimeout={connect_timeout}"])
     if (server.get("source") == "ssh_config" or server.get("ssh_config_managed")) and server.get("host_alias"):
         parts.append(str(server["host_alias"]))
-        return " ".join(shlex.quote(part) for part in parts)
+        return parts
 
     port = str(server.get("port") or "22")
     user = str(server.get("user") or "")
@@ -1761,7 +1855,7 @@ def ssh_command_for_server(server: dict) -> str:
     if key_file:
         parts.extend(["-i", key_file, "-o", "IdentitiesOnly=yes"])
     parts.append(str(server.get("host") or ""))
-    return " ".join(shlex.quote(part) for part in parts)
+    return parts
 
 
 def write_manual_remote(server: dict, rclone: str) -> None:
