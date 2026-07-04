@@ -1218,10 +1218,18 @@ def resolve_home_mountpoint(server: dict) -> Path:
     return parent / f"{base.name}-{uuid.uuid4().hex[:8]}"
 
 
+def is_under_home_mnt(path: Path) -> bool:
+    try:
+        path.expanduser().resolve(strict=False).relative_to((Path.home() / "mnt").resolve(strict=False))
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def prepare_gui_mountpoint(mountpoint: str, *, home_mountpoint: bool = False) -> None:
     path = Path(mountpoint).expanduser()
     value = str(path)
-    if home_mountpoint:
+    if home_mountpoint or is_under_home_mnt(path):
         path.parent.mkdir(parents=True, exist_ok=True)
     error = validate_mountpoint_for_mount(value)
     if error:
