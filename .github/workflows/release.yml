@@ -120,13 +120,14 @@ jobs:
               ;;
           esac
 
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${FILES[@]}" --clobber --repo "$GITHUB_REPOSITORY"
-            gh release edit "$TAG" "${NOTES_ARGS[@]}" "${PRERELEASE_ARGS[@]}" --repo "$GITHUB_REPOSITORY"
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${FILES[@]}" --clobber --repo "$GH_REPO"
+            gh release edit "$TAG" "${NOTES_ARGS[@]}" "${PRERELEASE_ARGS[@]}" --repo "$GH_REPO"
           else
             gh release create "$TAG" "${FILES[@]}" \
-              --repo "$GITHUB_REPOSITORY" \
+              --repo "$GH_REPO" \
               --title "SSH MountMate ${TAG}" \
               "${PRERELEASE_ARGS[@]}" \
               "${NOTES_ARGS[@]}"
           fi
+          gh release view "$TAG" --repo "$GH_REPO" >/dev/null
