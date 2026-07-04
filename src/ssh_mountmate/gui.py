@@ -45,7 +45,7 @@ DEFAULT_MOUNT_ALL_WORKERS = 4
 DEFAULT_UNMOUNT_ALL_WORKERS = 8
 BATCH_WORKER_CHOICES = ["1", "2", "3", "4", "6", "8", "10", "12"]
 HOME_MOUNTPOINT_VALUE = "__home_mnt__"
-FORM_LABEL_WIDTH = 168
+FORM_LABEL_CHARS = 22
 MACOS_STARTUP_HELPER_NAME = "SSHMountMateMountHelper"
 TEXT = {
     "en": {
@@ -3427,11 +3427,13 @@ class ServerDialog:
     def t(self, key: str, **kwargs) -> str:
         return tr_lang(self.lang, key, **kwargs)
 
+    def label_width(self, text: str) -> int:
+        return max(FORM_LABEL_CHARS, len(str(text or "")) + (3 if text else 0))
+
     def label(self, parent, text: str, *, required: bool = False) -> None:
-        label_frame = Frame(parent, width=FORM_LABEL_WIDTH)
-        label_frame.pack_propagate(False)
-        label_frame.pack(side=LEFT)
-        Label(label_frame, text=text, anchor="w").pack(side=LEFT)
+        label_frame = Frame(parent)
+        label_frame.pack(side=LEFT, fill=Y, padx=(0, 8))
+        Label(label_frame, text=text, width=self.label_width(text), anchor="w").pack(side=LEFT)
         if required:
             Label(label_frame, text="*", fg="#d32f2f", anchor="w").pack(side=LEFT, padx=(2, 0))
 
@@ -3478,11 +3480,18 @@ class ServerDialog:
         source_frame = Frame(self.form, padx=10, pady=4)
         source_frame.pack(fill=X)
         self.label(source_frame, self.t("source"))
-        ttk.Radiobutton(source_frame, text=self.t("ssh_config"), variable=self.source, value="ssh_config", command=self.on_source_changed).pack(side=LEFT)
+        source_options = Frame(source_frame)
+        source_options.pack(side=LEFT, fill=X, expand=True)
+        ttk.Radiobutton(source_options, text=self.t("ssh_config"), variable=self.source, value="ssh_config", command=self.on_source_changed).grid(row=0, column=0, sticky="w", padx=(0, 12), pady=1)
         if not self.existing:
-            ttk.Radiobutton(source_frame, text=self.t("ssh_config_batch"), variable=self.source, value="ssh_config_batch", command=self.on_source_changed).pack(side=LEFT)
-        ttk.Radiobutton(source_frame, text=self.t("sai_cluster"), variable=self.source, value="sai_cluster", command=self.on_source_changed).pack(side=LEFT)
-        ttk.Radiobutton(source_frame, text=self.t("manual"), variable=self.source, value="manual", command=self.on_source_changed).pack(side=LEFT)
+            ttk.Radiobutton(source_options, text=self.t("ssh_config_batch"), variable=self.source, value="ssh_config_batch", command=self.on_source_changed).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=1)
+            source_row = 1
+        else:
+            source_row = 0
+        ttk.Radiobutton(source_options, text=self.t("sai_cluster"), variable=self.source, value="sai_cluster", command=self.on_source_changed).grid(row=source_row, column=0, sticky="w", padx=(0, 12), pady=1)
+        ttk.Radiobutton(source_options, text=self.t("manual"), variable=self.source, value="manual", command=self.on_source_changed).grid(row=source_row, column=1, sticky="w", padx=(0, 12), pady=1)
+        source_options.grid_columnconfigure(0, weight=1)
+        source_options.grid_columnconfigure(1, weight=1)
 
         self.single_frame = Frame(self.form)
         self.single_frame.pack(fill=X)
