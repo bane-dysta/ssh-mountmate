@@ -46,4 +46,13 @@ jobs:
             exit 1
           fi
 
+          if ! gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+              echo "Release not found: ${TAG}" >&2
+              exit 1
+            fi
+            echo "Release ${TAG} does not exist yet; skipping notes update."
+            exit 0
+          fi
+
           gh release edit "${TAG}" --notes-file "${NOTES}" --repo "${GITHUB_REPOSITORY}"
