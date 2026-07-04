@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 import shlex
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, Button, Canvas, Checkbutton, Entry, Frame, Label, Scrollbar, StringVar, Text, Tk, Toplevel, filedialog, messagebox
@@ -96,6 +97,8 @@ TEXT = {
         "mount_workers_help": "Maximum number of configs mounted in parallel during Mount all. Higher values are faster but can trigger SSH rate limits.",
         "unmount_workers_help": "Maximum number of configs unmounted in parallel during Unmount all. Higher values are usually safe but can make errors arrive together.",
         "startup_all_help": "Creates or removes login-time mount jobs for all saved configs on supported platforms.",
+        "startup_all_macos_note": "macOS login mount takes effect on the next login.",
+        "startup_config_failed": "Some login mount jobs could not be updated. Details were written to: {path}",
         "dependency_help": "Checks dependencies. rclone is bundled in releases; Windows system dependencies use winget/system tools. macOS/Linux system dependencies show copyable commands.",
         "updates_help": "Checks the latest SSH MountMate release on GitHub and shows the matching download for this platform.",
         "logs_help": "Open recent rclone mount logs for a saved config. Useful for diagnosing failed mounts.",
@@ -240,6 +243,8 @@ TEXT = {
         "mount_workers_help": "批量挂载时最多同时处理多少个配置。更大更快，但可能触发 SSH 连接限制。",
         "unmount_workers_help": "批量取消挂载时最多同时处理多少个配置。通常可以比挂载更高，但错误可能集中出现。",
         "startup_all_help": "在支持的平台上为全部已保存配置创建或删除登录挂载任务。",
+        "startup_all_macos_note": "macOS 登录挂载会在下次登录时生效。",
+        "startup_config_failed": "部分登录挂载任务未能更新，详情已写入：{path}",
         "dependency_help": "检查依赖。Release 内置 rclone；Windows 系统依赖使用 winget/系统工具；macOS/Linux 系统依赖会显示可复制命令。",
         "updates_help": "检查 GitHub Releases 上的最新 SSH MountMate，并显示当前平台匹配的下载包。",
         "logs_help": "打开某个已保存配置最近的 rclone 挂载日志，用于排查挂载失败。",
@@ -2175,6 +2180,10 @@ def macos_startup_helper_path() -> Path:
     return user_data_dir() / "startup-helper" / MACOS_STARTUP_HELPER_NAME
 
 
+def macos_startup_helper_version_path() -> Path:
+    return macos_startup_helper_path().with_suffix(".version.json")
+
+
 def macos_startup_helper_needs_update(source: Path, target: Path) -> bool:
     if not target.exists():
         return True
@@ -2183,7 +2192,13 @@ def macos_startup_helper_needs_update(source: Path, target: Path) -> bool:
         target_stat = target.stat()
     except OSError:
         return True
-    return source_stat.st_size != target_stat.st_size or source_stat.st_mtime > target_stat.st_mtime
+    if source_stat.st_size != target_stat.st_size or source_stat.st_mtime > target_stat.st_mtime:
+        return True
+    try:
+        marker = json.loads(macos_startup_helper_version_path().read_text(encoding="utf-8"))
+    except Exception:
+        return True
+    return marker.get("version") != VERSION or marker.get("source") != str(source)
 
 
 def install_macos_startup_helper() -> Path:
@@ -2199,6 +2214,17 @@ def install_macos_startup_helper() -> Path:
         shutil.copy2(source, temp)
         temp.chmod(temp.stat().st_mode | 0o111)
         temp.replace(target)
+        macos_startup_helper_version_path().write_text(
+            json.dumps(
+                {
+                    "version": VERSION,
+                    "source": str(source),
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
     return target
 
 
@@ -2223,6 +2249,8 @@ def macos_launch_agent_plist(server: dict) -> dict:
         "Label": macos_launch_agent_label(server),
         "ProgramArguments": macos_startup_arguments(server_id),
         "RunAtLoad": True,
+        "KeepAlive": False,
+        "ThrottleInterval": 60,
         "WorkingDirectory": str(Path.home()),
         "StandardOutPath": str(state_dir / f"{server_id}.startup.out.log"),
         "StandardErrorPath": str(state_dir / f"{server_id}.startup.err.log"),
@@ -2252,6 +2280,19 @@ def disable_macos_startup(server: dict) -> None:
         except Exception:
             pass
         path.unlink(missing_ok=True)
+
+
+def startup_setup_log_path() -> Path:
+    return rsshmount.app_state_dir() / "startup-setup.log"
+
+
+def append_startup_setup_log(message: str) -> Path:
+    path = startup_setup_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"==== {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        handle.write(message.rstrip() + "\n\n")
+    return path
 
 
 def enable_startup(server: dict) -> None:
@@ -2844,6 +2885,8 @@ class App:
         )
         startup_check.pack(anchor="w", pady=8)
         attach_help(startup_check, "startup_all_help")
+        if sys.platform == "darwin":
+            Label(frame, text=self.t("startup_all_macos_note"), fg="#666666", anchor="w").pack(fill=X, pady=(0, 6))
 
         def save() -> None:
             new_settings = load_settings()
@@ -2884,14 +2927,35 @@ class App:
     def apply_startup_setting(self, enabled: bool) -> None:
         if not startup_supported():
             return
+        errors: list[str] = []
         for server in self.servers:
             try:
                 if enabled:
                     enable_startup(server)
                 else:
                     disable_startup(server)
-            except Exception:
-                pass
+            except Exception as exc:
+                errors.append(self.format_startup_error(server, enabled, exc))
+        if errors:
+            self.report_startup_errors(errors)
+
+    def format_startup_error(self, server: dict, enabled: bool, exc: Exception) -> str:
+        action = "enable" if enabled else "disable"
+        name = server.get("name") or server.get("id") or "<unknown>"
+        return (
+            f"{name}: failed to {action} login mount\n"
+            f"{exc}\n"
+            f"{traceback.format_exc().rstrip()}"
+        )
+
+    def report_startup_errors(self, errors: list[str]) -> None:
+        content = "\n\n".join(errors)
+        try:
+            log_path = append_startup_setup_log(content)
+            message = self.t("startup_config_failed", path=log_path) + "\n\n" + content
+        except Exception:
+            message = content
+        self.show_error(message)
 
     def install_deps_async(self) -> None:
         threading.Thread(target=self.install_deps, daemon=True).start()
@@ -3135,11 +3199,14 @@ class App:
                 self.servers.append(result)
             save_servers(self.servers)
             if load_settings().get("startup_all"):
+                startup_errors: list[str] = []
                 for result in results:
                     try:
                         enable_startup(result)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        startup_errors.append(self.format_startup_error(result, True, exc))
+                if startup_errors:
+                    self.report_startup_errors(startup_errors)
             if len(results) > 1:
                 self.status.set(self.t("imported_configs", count=len(results)))
             self.refresh_list()
