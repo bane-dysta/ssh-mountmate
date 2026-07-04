@@ -5,6 +5,7 @@ import glob
 import json
 import locale
 import os
+import plistlib
 import re
 import shutil
 import socket
@@ -23,6 +24,7 @@ from tkinter import ttk
 from . import VERSION
 from . import core as rsshmount
 from .notices import THIRD_PARTY_NOTICES
+from .paths import user_data_dir
 from .rclone import augment_process_path, install_managed_rclone, managed_rclone_path, manual_install_text
 from .updates import check_for_updates, format_update_info
 
@@ -42,6 +44,7 @@ DEFAULT_MOUNT_ALL_WORKERS = 4
 DEFAULT_UNMOUNT_ALL_WORKERS = 8
 BATCH_WORKER_CHOICES = ["1", "2", "3", "4", "6", "8", "10", "12"]
 HOME_MOUNTPOINT_VALUE = "__home_mnt__"
+MACOS_STARTUP_HELPER_NAME = "SSHMountMateMountHelper"
 TEXT = {
     "en": {
         "ready": "Ready",
@@ -92,13 +95,13 @@ TEXT = {
         "buffer_size_help": "Memory read buffer per open file. Larger values can improve sequential reads but use more RAM.",
         "mount_workers_help": "Maximum number of configs mounted in parallel during Mount all. Higher values are faster but can trigger SSH rate limits.",
         "unmount_workers_help": "Maximum number of configs unmounted in parallel during Unmount all. Higher values are usually safe but can make errors arrive together.",
-        "startup_all_help": "Creates or removes Windows logon tasks for all saved configs.",
+        "startup_all_help": "Creates or removes login-time mount jobs for all saved configs on supported platforms.",
         "dependency_help": "Checks dependencies. rclone is bundled in releases; Windows system dependencies use winget/system tools. macOS/Linux system dependencies show copyable commands.",
         "updates_help": "Checks the latest SSH MountMate release on GitHub and shows the matching download for this platform.",
         "logs_help": "Open recent rclone mount logs for a saved config. Useful for diagnosing failed mounts.",
         "licenses_help": "Show bundled third-party notices and license text.",
         "updates_title": "SSH MountMate updates",
-        "startup_all": "Mount all configs on Windows login",
+        "startup_all": "Mount all configs on login",
         "language": "Language",
         "save_settings": "Save settings",
         "settings_saved": "Settings saved.",
@@ -236,13 +239,13 @@ TEXT = {
         "buffer_size_help": "每个打开文件使用的内存读取缓冲。更大可能改善顺序读取，但会占用更多内存。",
         "mount_workers_help": "批量挂载时最多同时处理多少个配置。更大更快，但可能触发 SSH 连接限制。",
         "unmount_workers_help": "批量取消挂载时最多同时处理多少个配置。通常可以比挂载更高，但错误可能集中出现。",
-        "startup_all_help": "为全部已保存配置创建或删除 Windows 登录挂载任务。",
+        "startup_all_help": "在支持的平台上为全部已保存配置创建或删除登录挂载任务。",
         "dependency_help": "检查依赖。Release 内置 rclone；Windows 系统依赖使用 winget/系统工具；macOS/Linux 系统依赖会显示可复制命令。",
         "updates_help": "检查 GitHub Releases 上的最新 SSH MountMate，并显示当前平台匹配的下载包。",
         "logs_help": "打开某个已保存配置最近的 rclone 挂载日志，用于排查挂载失败。",
         "licenses_help": "查看内置第三方声明和许可证文本。",
         "updates_title": "SSH MountMate 更新",
-        "startup_all": "Windows 登录时挂载全部配置",
+        "startup_all": "登录时挂载全部配置",
         "language": "语言",
         "save_settings": "保存设置",
         "settings_saved": "设置已保存。",
@@ -2164,12 +2167,109 @@ def startup_command(server_id: str) -> str:
     return f'"{pythonw}" "{Path(__file__).resolve()}" --mount-id "{server_id}"'
 
 
+def startup_supported() -> bool:
+    return os.name == "nt" or sys.platform == "darwin"
+
+
+def macos_startup_helper_path() -> Path:
+    return user_data_dir() / "startup-helper" / MACOS_STARTUP_HELPER_NAME
+
+
+def macos_startup_helper_needs_update(source: Path, target: Path) -> bool:
+    if not target.exists():
+        return True
+    try:
+        source_stat = source.stat()
+        target_stat = target.stat()
+    except OSError:
+        return True
+    return source_stat.st_size != target_stat.st_size or source_stat.st_mtime > target_stat.st_mtime
+
+
+def install_macos_startup_helper() -> Path:
+    if not getattr(sys, "frozen", False):
+        return Path(sys.executable)
+    source = Path(sys.executable).resolve()
+    target = macos_startup_helper_path()
+    if source == target:
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if macos_startup_helper_needs_update(source, target):
+        temp = target.with_name(f"{target.name}.tmp")
+        shutil.copy2(source, temp)
+        temp.chmod(temp.stat().st_mode | 0o111)
+        temp.replace(target)
+    return target
+
+
+def macos_startup_arguments(server_id: str) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [str(macos_startup_helper_path()), "--mount-id", server_id]
+    return [sys.executable, "-m", "ssh_mountmate", "--mount-id", server_id]
+
+
+def macos_launch_agent_label(server: dict) -> str:
+    return f"com.sshmountmate.mount.{sanitize_server_id(str(server['id']))}"
+
+
+def macos_launch_agent_path(server: dict) -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{macos_launch_agent_label(server)}.plist"
+
+
+def macos_launch_agent_plist(server: dict) -> dict:
+    state_dir = rsshmount.app_state_dir()
+    server_id = str(server["id"])
+    return {
+        "Label": macos_launch_agent_label(server),
+        "ProgramArguments": macos_startup_arguments(server_id),
+        "RunAtLoad": True,
+        "WorkingDirectory": str(Path.home()),
+        "StandardOutPath": str(state_dir / f"{server_id}.startup.out.log"),
+        "StandardErrorPath": str(state_dir / f"{server_id}.startup.err.log"),
+    }
+
+
+def enable_macos_startup(server: dict) -> None:
+    path = macos_launch_agent_path(server)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rsshmount.app_state_dir().mkdir(parents=True, exist_ok=True)
+    install_macos_startup_helper()
+    with path.open("wb") as handle:
+        plistlib.dump(macos_launch_agent_plist(server), handle, sort_keys=False)
+    path.chmod(0o644)
+
+
+def disable_macos_startup(server: dict) -> None:
+    path = macos_launch_agent_path(server)
+    if path.exists():
+        try:
+            subprocess.run(
+                ["launchctl", "bootout", f"gui/{os.getuid()}", str(path)],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+        path.unlink(missing_ok=True)
+
+
 def enable_startup(server: dict) -> None:
+    if sys.platform == "darwin":
+        enable_macos_startup(server)
+        return
+    if os.name != "nt":
+        return
     task_name = f"SSHMountMate-{server['id']}"
     run(["schtasks", "/Create", "/TN", task_name, "/SC", "ONLOGON", "/TR", startup_command(server["id"]), "/F"])
 
 
 def disable_startup(server: dict) -> None:
+    if sys.platform == "darwin":
+        disable_macos_startup(server)
+        return
+    if os.name != "nt":
+        return
     task_name = f"SSHMountMate-{server['id']}"
     subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"], text=True, creationflags=create_no_window())
 
@@ -2182,7 +2282,11 @@ def headless_mount(server_id: str) -> int:
     rclone = resolve_rclone_path()
     if not rclone:
         return 3
-    mount_server(server, rclone)
+    state = mount_server(server, rclone)
+    if sys.platform == "darwin":
+        pid = int(state.get("pid") or 0)
+        while pid and pid_is_running(pid):
+            time.sleep(30)
     return 0
 
 
@@ -2620,7 +2724,7 @@ class App:
         buffer_size = StringVar(value=setting_to_choice(settings.get("buffer_size", ""), BUFFER_SIZE_CHOICES[0]))
         mount_workers = StringVar(value=setting_worker_choice(settings.get("mount_all_workers"), DEFAULT_MOUNT_ALL_WORKERS))
         unmount_workers = StringVar(value=setting_worker_choice(settings.get("unmount_all_workers"), DEFAULT_UNMOUNT_ALL_WORKERS))
-        startup_all = BooleanVar(value=bool(settings.get("startup_all", False)))
+        startup_all = BooleanVar(value=bool(settings.get("startup_all", False)) and startup_supported())
         language = StringVar(value=language_choice_from_setting(settings.get("language", "auto")))
 
         def attach_help(widget, key: str) -> None:
@@ -2732,7 +2836,12 @@ class App:
         attach_help(unmount_workers_label, "unmount_workers_help")
         attach_help(unmount_workers_combo, "unmount_workers_help")
 
-        startup_check = Checkbutton(frame, text=self.t("startup_all"), variable=startup_all)
+        startup_check = Checkbutton(
+            frame,
+            text=self.t("startup_all"),
+            variable=startup_all,
+            state="normal" if startup_supported() else "disabled",
+        )
         startup_check.pack(anchor="w", pady=8)
         attach_help(startup_check, "startup_all_help")
 
@@ -2750,7 +2859,7 @@ class App:
                     "buffer_size": choice_to_setting(buffer_size.get().strip()),
                     "mount_all_workers": bounded_int(mount_workers.get(), DEFAULT_MOUNT_ALL_WORKERS),
                     "unmount_all_workers": bounded_int(unmount_workers.get(), DEFAULT_UNMOUNT_ALL_WORKERS),
-                    "startup_all": bool(startup_all.get()),
+                    "startup_all": bool(startup_all.get()) and startup_supported(),
                     "language": language_setting_from_choice(language.get()),
                 }
             )
@@ -2773,7 +2882,7 @@ class App:
             variable.set(path)
 
     def apply_startup_setting(self, enabled: bool) -> None:
-        if os.name != "nt":
+        if not startup_supported():
             return
         for server in self.servers:
             try:
@@ -3701,6 +3810,10 @@ class ServerDialog:
         self.window.destroy()
 
 
+def ignore_macos_launchservice_args(argv: list[str]) -> list[str]:
+    return [arg for arg in argv if not arg.startswith("-psn_")]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", action="version", version=f"{APP_TITLE} {VERSION}")
@@ -3708,7 +3821,7 @@ def main() -> int:
     parser.add_argument("--licenses", action="store_true", help="Print bundled third-party notices and licenses and exit.")
     parser.add_argument("--check-update", action="store_true", help="Check the latest GitHub release and exit.")
     parser.add_argument("--mount-id")
-    args = parser.parse_args()
+    args = parser.parse_args(ignore_macos_launchservice_args(sys.argv[1:]))
     if args.install_help:
         print(manual_install_text())
         return 0

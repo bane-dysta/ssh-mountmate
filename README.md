@@ -265,7 +265,7 @@ The Settings window contains:
 - program update check
 - mount log access
 - language selection
-- Windows startup mount option
+- Windows/macOS login startup mount option
 - rclone VFS cache root
 - VFS cache mode
 - max cache size
@@ -278,6 +278,8 @@ The Settings window contains:
 - batch unmount concurrency
 
 Each option has a tooltip in the GUI.
+
+On macOS, the login startup option writes per-config user LaunchAgent files under `~/Library/LaunchAgents/`. Each job calls SSH MountMate's headless `--mount-id` entrypoint and mounts the saved config after the user logs in.
 
 ## Building From Source
 
@@ -591,7 +593,7 @@ Settings 页面包含：
 - 程序更新检查
 - 挂载日志
 - 语言选择
-- Windows 开机挂载
+- Windows/macOS 登录挂载
 - rclone VFS 缓存目录
 - VFS 缓存模式
 - 最大缓存大小
@@ -604,6 +606,8 @@ Settings 页面包含：
 - 批量取消挂载并行数
 
 每个选项在 GUI 中都有鼠标悬停说明。
+
+在 macOS 上，登录挂载选项会在 `~/Library/LaunchAgents/` 下为每个配置写入用户级 LaunchAgent 文件。每个任务会调用 SSH MountMate 的无界面 `--mount-id` 入口，在用户登录后挂载对应配置。
 
 ## 从源码构建
 
