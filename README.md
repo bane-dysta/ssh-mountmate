@@ -36,6 +36,8 @@ Windows:
 
 Copyable Windows dependency commands:
 
+WinFsp can be downloaded directly from https://winfsp.dev/rel/ . If winget works well on your network, this command is also available:
+
 ```powershell
 winget install --id WinFsp.WinFsp -e
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0"
@@ -363,6 +365,8 @@ Windows：
 - OpenSSH Client
 
 Windows 依赖可复制命令：
+
+WinFsp 可以直接从 https://winfsp.dev/rel/ 下载。如果当前网络下 winget 可用，也可以使用下面的命令：
 
 ```powershell
 winget install --id WinFsp.WinFsp -e

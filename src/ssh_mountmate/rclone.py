@@ -327,15 +327,15 @@ def manual_install_commands(missing: list[str] | set[str] | None = None) -> dict
         "Windows": [line for key, lines in [
             ("rclone", [
             "rclone:",
-            "winget install --id Rclone.Rclone -e",
             f"Download and unzip: {rclone_download_url(system='Windows')}",
             "Place rclone.exe on PATH or next to SSHMountMate.exe.",
+            "Optional winget fallback: winget install --id Rclone.Rclone -e",
             "",
             ]),
             ("WinFsp", [
             "WinFsp:",
-            "winget install --id WinFsp.WinFsp -e",
-            "or download the installer from: https://winfsp.dev/rel/",
+            "Download the installer from: https://winfsp.dev/rel/",
+            "Optional winget command: winget install --id WinFsp.WinFsp -e",
             "",
             ]),
             ("OpenSSH", [

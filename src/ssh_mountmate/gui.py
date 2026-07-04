@@ -45,6 +45,7 @@ DEFAULT_MOUNT_ALL_WORKERS = 4
 DEFAULT_UNMOUNT_ALL_WORKERS = 8
 BATCH_WORKER_CHOICES = ["1", "2", "3", "4", "6", "8", "10", "12"]
 HOME_MOUNTPOINT_VALUE = "__home_mnt__"
+FORM_LABEL_WIDTH = 168
 MACOS_STARTUP_HELPER_NAME = "SSHMountMateMountHelper"
 TEXT = {
     "en": {
@@ -99,7 +100,7 @@ TEXT = {
         "startup_all_help": "Creates or removes login-time mount jobs for all saved configs on supported platforms.",
         "startup_all_macos_note": "macOS login mount takes effect on the next login.",
         "startup_config_failed": "Some login mount jobs could not be updated. Details were written to: {path}",
-        "dependency_help": "Checks dependencies. rclone is bundled in releases; Windows system dependencies use winget/system tools. macOS/Linux system dependencies show copyable commands.",
+        "dependency_help": "Checks dependencies. rclone is bundled in releases; Windows system dependencies can use winget, but the manual help also shows direct installer links.",
         "updates_help": "Checks the latest SSH MountMate release on GitHub and shows the matching download for this platform.",
         "logs_help": "Open recent rclone mount logs for a saved config. Useful for diagnosing failed mounts.",
         "licenses_help": "Show bundled third-party notices and license text.",
@@ -245,7 +246,7 @@ TEXT = {
         "startup_all_help": "在支持的平台上为全部已保存配置创建或删除登录挂载任务。",
         "startup_all_macos_note": "macOS 登录挂载会在下次登录时生效。",
         "startup_config_failed": "部分登录挂载任务未能更新，详情已写入：{path}",
-        "dependency_help": "检查依赖。Release 内置 rclone；Windows 系统依赖使用 winget/系统工具；macOS/Linux 系统依赖会显示可复制命令。",
+        "dependency_help": "检查依赖。Release 内置 rclone；Windows 系统依赖可以使用 winget，手动说明里也会给出直接下载安装入口。",
         "updates_help": "检查 GitHub Releases 上的最新 SSH MountMate，并显示当前平台匹配的下载包。",
         "logs_help": "打开某个已保存配置最近的 rclone 挂载日志，用于排查挂载失败。",
         "licenses_help": "查看内置第三方声明和许可证文本。",
@@ -414,8 +415,29 @@ def setting_worker_choice(value, default: int) -> str:
 
 
 def system_language() -> str:
+    env_lang = " ".join(
+        str(os.environ.get(key) or "")
+        for key in ("SSH_MOUNTMATE_LANG", "LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG")
+    ).lower()
+    if "zh" in env_lang or "chinese" in env_lang:
+        return "zh"
+    if os.name == "nt":
+        try:
+            buffer = ctypes.create_unicode_buffer(85)
+            if ctypes.windll.kernel32.GetUserDefaultLocaleName(buffer, len(buffer)):
+                if buffer.value.lower().startswith("zh"):
+                    return "zh"
+        except Exception:
+            pass
+        try:
+            lang_id = int(ctypes.windll.kernel32.GetUserDefaultUILanguage())
+            primary_lang = lang_id & 0x3FF
+            if primary_lang == 0x04:
+                return "zh"
+        except Exception:
+            pass
     try:
-        lang = locale.getlocale()[0] or locale.getdefaultlocale()[0] or ""
+        lang = locale.getlocale()[0] or locale.getdefaultlocale()[0] or locale.getlocale(locale.LC_CTYPE)[0] or ""
     except Exception:
         lang = ""
     return "zh" if lang.lower().startswith("zh") else "en"
@@ -1165,7 +1187,7 @@ def mountpoint_ready(mountpoint: str) -> bool:
 def resolve_mountpoint(server: dict) -> str:
     configured_mountpoint = server.get("mountpoint") or ""
     if configured_mountpoint == HOME_MOUNTPOINT_VALUE:
-        return str(rsshmount.home_mountpoint(mountpoint_folder_name(server)))
+        return str(resolve_home_mountpoint(server))
     if not configured_mountpoint or configured_mountpoint.lower() == "auto":
         if os.name != "nt":
             return str(rsshmount.home_mountpoint(mountpoint_folder_name(server)))
@@ -1175,9 +1197,32 @@ def resolve_mountpoint(server: dict) -> str:
     return str(Path(configured_mountpoint).expanduser())
 
 
-def prepare_gui_mountpoint(mountpoint: str) -> None:
+def resolve_home_mountpoint(server: dict) -> Path:
+    base = rsshmount.home_mountpoint(mountpoint_folder_name(server))
+    parent = base.parent
+    if current_state(server).get("mountpoint"):
+        return Path(current_state(server)["mountpoint"]).expanduser()
+    for index in range(1, 1000):
+        candidate = base if index == 1 else base.with_name(f"{base.name}-{index}")
+        try:
+            if candidate.is_mount():
+                continue
+            if os.name == "nt":
+                if not candidate.exists():
+                    return candidate
+                continue
+            if not candidate.exists() or candidate.is_dir():
+                return candidate
+        except OSError:
+            continue
+    return parent / f"{base.name}-{uuid.uuid4().hex[:8]}"
+
+
+def prepare_gui_mountpoint(mountpoint: str, *, home_mountpoint: bool = False) -> None:
     path = Path(mountpoint).expanduser()
     value = str(path)
+    if home_mountpoint:
+        path.parent.mkdir(parents=True, exist_ok=True)
     error = validate_mountpoint_for_mount(value)
     if error:
         raise RuntimeError(f"Invalid mountpoint: {error}")
@@ -1551,7 +1596,7 @@ def sai_cluster_defaults(user: str = "") -> dict:
         "key_file": "",
         "connection_method": "native",
         "remote_path": "",
-        "mountpoint": HOME_MOUNTPOINT_VALUE,
+        "mountpoint": "",
         "ssh_config_managed": True,
         "copy_key_to_ssh_dir": True,
     }
@@ -1906,7 +1951,10 @@ def install_winfsp() -> None:
     refresh_windows_path_env()
     if winfsp_installed():
         return
-    raise RuntimeError(f"WinFsp was not found after winget finished. winget exit code: {code}. Log: {log_path}")
+    raise RuntimeError(
+        f"WinFsp was not found after winget finished. winget exit code: {code}. Log: {log_path}\n\n"
+        + manual_install_text(["WinFsp"])
+    )
 
 
 def install_openssh_client() -> None:
@@ -2026,7 +2074,7 @@ def mount_server_locked(server: dict, rclone: str, *, verify_existing: bool = Tr
 
     remote_path = server.get("remote_path") or ""
     mountpoint = resolve_mountpoint(server)
-    prepare_gui_mountpoint(mountpoint)
+    prepare_gui_mountpoint(mountpoint, home_mountpoint=server.get("mountpoint") == HOME_MOUNTPOINT_VALUE)
     remote = rsshmount.remote_spec(remote_name(server), remote_path)
     log_path = state_dir / f"{remote_name(server)}.log"
     rc_addr = f"127.0.0.1:{free_local_port()}"
@@ -3341,8 +3389,8 @@ class ServerDialog:
         self.batch_config_path = StringVar(value=str(Path.home() / ".ssh" / "config"))
         self.window = Toplevel(root)
         self.window.title(self.t("edit_config_title") if existing else self.t("add_config_title"))
-        self.window.geometry("580x600")
-        self.window.minsize(500, 420)
+        self.window.geometry("660x600")
+        self.window.minsize(560, 420)
         self.window.resizable(True, True)
         self.canvas = Canvas(self.window, highlightthickness=0)
         self.scrollbar = Scrollbar(self.window, orient="vertical", command=self.canvas.yview)
@@ -3372,7 +3420,7 @@ class ServerDialog:
         return tr_lang(self.lang, key, **kwargs)
 
     def label(self, parent, text: str, *, required: bool = False) -> None:
-        label_frame = Frame(parent, width=112)
+        label_frame = Frame(parent, width=FORM_LABEL_WIDTH)
         label_frame.pack_propagate(False)
         label_frame.pack(side=LEFT)
         Label(label_frame, text=text, anchor="w").pack(side=LEFT)
@@ -3421,7 +3469,7 @@ class ServerDialog:
     def build(self) -> None:
         source_frame = Frame(self.form, padx=10, pady=4)
         source_frame.pack(fill=X)
-        Label(source_frame, text=self.t("source"), width=14, anchor="w").pack(side=LEFT)
+        self.label(source_frame, self.t("source"))
         ttk.Radiobutton(source_frame, text=self.t("ssh_config"), variable=self.source, value="ssh_config", command=self.on_source_changed).pack(side=LEFT)
         if not self.existing:
             ttk.Radiobutton(source_frame, text=self.t("ssh_config_batch"), variable=self.source, value="ssh_config_batch", command=self.on_source_changed).pack(side=LEFT)
@@ -3445,7 +3493,7 @@ class ServerDialog:
 
         auth_frame = Frame(self.single_frame, padx=10, pady=4)
         auth_frame.pack(fill=X)
-        Label(auth_frame, text=self.t("auth"), width=14, anchor="w").pack(side=LEFT)
+        self.label(auth_frame, self.t("auth"))
         self.auth_buttons = [
             ttk.Radiobutton(auth_frame, text=self.t("key"), variable=self.auth, value="key", command=self.update_connection_method_controls),
             ttk.Radiobutton(auth_frame, text=self.t("password_auth"), variable=self.auth, value="password", command=self.update_connection_method_controls),
@@ -3458,7 +3506,7 @@ class ServerDialog:
 
         ssh_write_frame = Frame(self.single_frame, padx=10, pady=4)
         ssh_write_frame.pack(fill=X)
-        Label(ssh_write_frame, text="", width=14, anchor="w").pack(side=LEFT)
+        self.label(ssh_write_frame, "")
         self.write_ssh_config_check = Checkbutton(ssh_write_frame, text=self.t("write_ssh_config"), variable=self.write_ssh_config, command=self.update_source_controls)
         self.write_ssh_config_check.pack(side=LEFT)
         self.copy_key_check = Checkbutton(ssh_write_frame, text=self.t("copy_key_to_ssh_dir"), variable=self.copy_key_to_ssh, command=self.update_connection_method_controls)
@@ -3468,7 +3516,7 @@ class ServerDialog:
 
         method_frame = Frame(self.single_frame, padx=10, pady=4)
         method_frame.pack(fill=X)
-        Label(method_frame, text=self.t("connection_method"), width=14, anchor="w").pack(side=LEFT)
+        self.label(method_frame, self.t("connection_method"))
         ttk.Radiobutton(method_frame, text=self.t("rclone_native"), variable=self.connection_method, value="native", command=self.update_connection_method_controls).pack(side=LEFT)
         ttk.Radiobutton(method_frame, text=self.t("openssh"), variable=self.connection_method, value="openssh", command=self.update_connection_method_controls).pack(side=LEFT)
         self.connection_help = Label(self.single_frame, text=self.t("openssh_help"), fg="#666666", wraplength=520, justify=LEFT)
@@ -3504,7 +3552,7 @@ class ServerDialog:
 
         file_row = Frame(self.batch_frame, padx=10, pady=4)
         file_row.pack(fill=X)
-        Label(file_row, text=self.t("ssh_config_file"), width=14, anchor="w").pack(side=LEFT)
+        self.label(file_row, self.t("ssh_config_file"))
         file_entry = Entry(file_row, textvariable=self.batch_config_path)
         file_entry.pack(side=LEFT, fill=X, expand=True)
         file_entry.bind("<Return>", lambda _event: self.load_batch_preview())
