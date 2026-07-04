@@ -188,7 +188,7 @@ TEXT = {
         "port_invalid": "Port must be a number from 1 to 65535.",
         "ssh_host_required": "SSH Host is required before writing SSH config.",
         "ssh_host_invalid": "SSH Host can only contain letters, numbers, dots, underscores, hyphens, and colons.",
-        "key_file_required": "Select a private key file before copying it to ~/.ssh.",
+        "key_file_required": "Select a private key file.",
         "key_file_not_found": "Key file not found: {path}",
         "private_key_required": "Select the private key file, not the .pub public key file.",
         "duplicate_target": "A config for the same IP/Host, user, and port already exists: {name}",
@@ -334,7 +334,7 @@ TEXT = {
         "port_invalid": "端口必须是 1 到 65535 之间的数字。",
         "ssh_host_required": "写入 SSH config 前必须填写 SSH Host。",
         "ssh_host_invalid": "SSH Host 只能包含字母、数字、点、下划线、短横线和冒号。",
-        "key_file_required": "复制密钥到 ~/.ssh 前必须选择私钥文件。",
+        "key_file_required": "请选择私钥文件。",
         "key_file_not_found": "找不到密钥文件：{path}",
         "private_key_required": "请选择私钥文件，不要选择 .pub 公钥文件。",
         "duplicate_target": "已存在相同 IP/主机、用户名和端口的配置：{name}",
@@ -792,7 +792,7 @@ def validate_ssh_config_scalar(value: object, field_name: str) -> str:
 def validate_private_key_path(path_value: str) -> str:
     text = str(path_value or "").strip()
     if not text:
-        raise ValueError("Select a private key file before copying it to ~/.ssh.")
+        raise ValueError("Select a private key file.")
     path = Path(text).expanduser()
     if not path.exists() or not path.is_file():
         raise ValueError(f"Key file not found: {text}")
@@ -3393,6 +3393,7 @@ class ServerDialog:
         self.write_ssh_config = BooleanVar(value=bool(self.existing.get("ssh_config_managed", False)))
         self.copy_key_to_ssh = BooleanVar(value=bool(self.existing.get("copy_key_to_ssh_dir", False)))
         self.values: dict[str, Entry] = {}
+        self.required_stars: dict[str, Label] = {}
         self.last_sai_profile_name = sai_profile_name(self.existing.get("user", ""))
         self.batch_config_path = StringVar(value=str(Path.home() / ".ssh" / "config"))
         self.window = Toplevel(root)
@@ -3430,17 +3431,22 @@ class ServerDialog:
     def label_width(self, text: str) -> int:
         return max(FORM_LABEL_CHARS, len(str(text or "")) + (3 if text else 0))
 
-    def label(self, parent, text: str, *, required: bool = False) -> None:
+    def label(self, parent, text: str, *, required: bool = False, required_key: str = "") -> None:
         label_frame = Frame(parent)
         label_frame.pack(side=LEFT, fill=Y, padx=(0, 8))
         Label(label_frame, text=text, width=self.label_width(text), anchor="w").pack(side=LEFT)
-        if required:
-            Label(label_frame, text="*", fg="#d32f2f", anchor="w").pack(side=LEFT, padx=(2, 0))
+        if required or required_key:
+            star = Label(label_frame, text="*", fg="#d32f2f", anchor="w")
+            star.pack(side=LEFT, padx=(2, 0))
+            if required_key:
+                self.required_stars[required_key] = star
+                if not required:
+                    star.pack_forget()
 
-    def row(self, label: str, key: str, default: str = "", browse=False, secret=False, parent=None, required: bool = False):
+    def row(self, label: str, key: str, default: str = "", browse=False, secret=False, parent=None, required: bool = False, required_key: str = ""):
         frame = Frame(parent or self.form, padx=10, pady=4)
         frame.pack(fill=X)
-        self.label(frame, label, required=required)
+        self.label(frame, label, required=required, required_key=required_key)
         entry = Entry(frame, show="*" if secret else None)
         entry.insert(0, default)
         entry.pack(side=LEFT, fill=X, expand=True)
@@ -3482,16 +3488,11 @@ class ServerDialog:
         self.label(source_frame, self.t("source"))
         source_options = Frame(source_frame)
         source_options.pack(side=LEFT, fill=X, expand=True)
-        ttk.Radiobutton(source_options, text=self.t("ssh_config"), variable=self.source, value="ssh_config", command=self.on_source_changed).grid(row=0, column=0, sticky="w", padx=(0, 12), pady=1)
+        ttk.Radiobutton(source_options, text=self.t("ssh_config"), variable=self.source, value="ssh_config", command=self.on_source_changed).pack(side=LEFT, padx=(0, 12))
         if not self.existing:
-            ttk.Radiobutton(source_options, text=self.t("ssh_config_batch"), variable=self.source, value="ssh_config_batch", command=self.on_source_changed).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=1)
-            source_row = 1
-        else:
-            source_row = 0
-        ttk.Radiobutton(source_options, text=self.t("sai_cluster"), variable=self.source, value="sai_cluster", command=self.on_source_changed).grid(row=source_row, column=0, sticky="w", padx=(0, 12), pady=1)
-        ttk.Radiobutton(source_options, text=self.t("manual"), variable=self.source, value="manual", command=self.on_source_changed).grid(row=source_row, column=1, sticky="w", padx=(0, 12), pady=1)
-        source_options.grid_columnconfigure(0, weight=1)
-        source_options.grid_columnconfigure(1, weight=1)
+            ttk.Radiobutton(source_options, text=self.t("ssh_config_batch"), variable=self.source, value="ssh_config_batch", command=self.on_source_changed).pack(side=LEFT, padx=(0, 12))
+        ttk.Radiobutton(source_options, text=self.t("sai_cluster"), variable=self.source, value="sai_cluster", command=self.on_source_changed).pack(side=LEFT, padx=(0, 12))
+        ttk.Radiobutton(source_options, text=self.t("manual"), variable=self.source, value="manual", command=self.on_source_changed).pack(side=LEFT, padx=(0, 12))
 
         self.single_frame = Frame(self.form)
         self.single_frame.pack(fill=X)
@@ -3517,9 +3518,9 @@ class ServerDialog:
         ]
         for button in self.auth_buttons:
             button.pack(side=LEFT)
-        self.row(self.t("key_file"), "key_file", self.existing.get("key_file", ""), browse=True, parent=self.single_frame)
+        self.row(self.t("key_file"), "key_file", self.existing.get("key_file", ""), browse=True, parent=self.single_frame, required_key="key_file")
         self.row(self.t("key_passphrase"), "key_passphrase", secret=True, parent=self.single_frame)
-        self.row(self.t("password"), "password", secret=True, parent=self.single_frame)
+        self.row(self.t("password"), "password", secret=True, parent=self.single_frame, required_key="password")
 
         ssh_write_frame = Frame(self.single_frame, padx=10, pady=4)
         ssh_write_frame.pack(fill=X)
@@ -3690,6 +3691,22 @@ class ServerDialog:
                     pass
         self.update_connection_method_controls()
 
+    def set_required_star(self, key: str, visible: bool) -> None:
+        star = self.required_stars.get(key)
+        if not star:
+            return
+        if visible:
+            if not star.winfo_manager():
+                star.pack(side=LEFT, padx=(2, 0))
+        else:
+            star.pack_forget()
+
+    def update_required_stars(self) -> None:
+        single_config = self.source.get() != "ssh_config_batch"
+        native_rclone = self.connection_method.get() != "openssh"
+        self.set_required_star("key_file", single_config and native_rclone and self.auth.get() == "key")
+        self.set_required_star("password", single_config and native_rclone and self.auth.get() == "password")
+
     def update_connection_method_controls(self) -> None:
         if not hasattr(self, "connection_help"):
             return
@@ -3722,6 +3739,7 @@ class ServerDialog:
                 self.copy_key_check.configure(state=copy_state)
             except Exception:
                 pass
+        self.update_required_stars()
 
     def on_source_changed(self) -> None:
         self.update_source_controls()
@@ -3744,6 +3762,7 @@ class ServerDialog:
         for key in ["name", "host", "user", "port", "key_file"]:
             self.set_value(key, defaults.get(key, ""))
         self.auth.set("key" if defaults.get("key_file") else self.auth.get())
+        self.update_connection_method_controls()
 
     def apply_sai_defaults(self) -> None:
         defaults = sai_cluster_defaults("")
@@ -3795,7 +3814,7 @@ class ServerDialog:
             return self.t("ssh_host_invalid")
         if text.startswith("Port"):
             return self.t("port_invalid")
-        if text.startswith("Select a private key file before copying"):
+        if text.startswith("Select a private key file"):
             return self.t("key_file_required")
         if text.startswith("Select the private key file"):
             return self.t("private_key_required")
@@ -3889,6 +3908,13 @@ class ServerDialog:
         if duplicate_name:
             self.show_validation_error(self.t("duplicate_target", name=duplicate_name))
             return
+
+        if result["connection_method"] != "openssh" and result["auth"] == "key":
+            try:
+                result["key_file"] = validate_private_key_path(result.get("key_file", ""))
+            except Exception as exc:
+                self.show_validation_error(self.validation_message(exc))
+                return
 
         if result["ssh_config_managed"]:
             try:
