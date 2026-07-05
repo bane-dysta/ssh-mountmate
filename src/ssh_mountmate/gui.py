@@ -185,6 +185,8 @@ TEXT = {
         "password": "Password",
         "remote_path": "Remote path",
         "mountpoint": "Mountpoint",
+        "mountpoint_preset": "Mountpoint preset",
+        "custom_mountpoint": "Custom mountpoint",
         "home_mountpoint": "User folder (~/mnt/name)",
         "mountpoint_help": "Use Auto, a drive letter on Windows, or a custom absolute folder. macOS/Linux folders are created if missing. Windows folder mountpoints need an existing parent and a non-existing target folder.",
         "invalid_mountpoint": "Invalid mountpoint: {reason}",
@@ -199,7 +201,7 @@ TEXT = {
         "key_file_required": "Select a private key file.",
         "key_file_not_found": "Key file not found: {path}",
         "private_key_required": "Select the private key file, not the .pub public key file.",
-        "duplicate_target": "A config for the same IP/Host, user, and port already exists: {name}",
+        "duplicate_target": "A config for the same IP/Host, user, port, remote path, and mountpoint already exists: {name}",
         "password_required": "Password is required.",
     },
     "zh": {
@@ -339,6 +341,8 @@ TEXT = {
         "password": "密码",
         "remote_path": "远程路径",
         "mountpoint": "挂载点",
+        "mountpoint_preset": "挂载点预设",
+        "custom_mountpoint": "自定义挂载点",
         "home_mountpoint": "用户文件夹 (~/mnt/名称)",
         "mountpoint_help": "可以使用 Auto、Windows 盘符，或自定义绝对路径文件夹。macOS/Linux 文件夹不存在时会创建；Windows 文件夹挂载要求父目录已存在，目标文件夹本身不能已存在。",
         "invalid_mountpoint": "挂载点无效：{reason}",
@@ -353,7 +357,7 @@ TEXT = {
         "key_file_required": "请选择私钥文件。",
         "key_file_not_found": "找不到密钥文件：{path}",
         "private_key_required": "请选择私钥文件，不要选择 .pub 公钥文件。",
-        "duplicate_target": "已存在相同 IP/主机、用户名和端口的配置：{name}",
+        "duplicate_target": "已存在相同 IP/主机、用户名、端口、远程路径和挂载点的配置：{name}",
         "password_required": "密码必填。",
     },
 }
@@ -1509,27 +1513,41 @@ def home_mountpoint_label(lang: str) -> str:
 
 def mountpoint_choices(lang: str = "en") -> list[str]:
     if os.name != "nt":
-        return ["Auto"]
+        return ["Auto", home_mountpoint_label(lang), custom_mountpoint_label(lang)]
     choices = ["Auto", home_mountpoint_label(lang)]
     for letter in "ZYXWVUTSRQPONMLKJIHGFED":
         drive = f"{letter}:"
         if not rsshmount.windows_drive_in_use(drive):
             choices.append(drive)
+    choices.append(custom_mountpoint_label(lang))
     return choices
+
+
+def custom_mountpoint_label(lang: str) -> str:
+    return tr_lang(lang, "custom_mountpoint")
+
+
+def mountpoint_is_custom_choice(value: str, lang: str) -> bool:
+    text = (value or "").strip()
+    return text in {custom_mountpoint_label("en"), custom_mountpoint_label("zh"), custom_mountpoint_label(lang)}
 
 
 def mountpoint_value_to_choice(value: str, lang: str) -> str:
     if value == HOME_MOUNTPOINT_VALUE:
         return home_mountpoint_label(lang)
+    if is_custom_mountpoint(value) and not is_windows_mount_drive(value):
+        return custom_mountpoint_label(lang)
     return value or "Auto"
 
 
-def mountpoint_choice_to_value(value: str, lang: str) -> str:
+def mountpoint_choice_to_value(value: str, lang: str, custom_value: str = "") -> str:
     text = (value or "").strip()
     if not text or text.lower() == "auto":
         return ""
     if text == HOME_MOUNTPOINT_VALUE or text in {home_mountpoint_label("en"), home_mountpoint_label("zh"), home_mountpoint_label(lang)}:
         return HOME_MOUNTPOINT_VALUE
+    if mountpoint_is_custom_choice(text, lang):
+        return (custom_value or "").strip()
     return text
 
 
@@ -1656,19 +1674,38 @@ def normalized_host_alias(server: dict) -> str:
     return str(server.get("host_alias") or "").strip().casefold()
 
 
-def target_fingerprint(server: dict) -> tuple[str, str, str]:
+def target_fingerprint(server: dict) -> tuple[str, str, str, str, str]:
     return (
         str(server.get("host") or "").strip().casefold(),
         str(server.get("user") or "").strip(),
         normalized_target_port(server.get("port")),
+        normalized_remote_path_fingerprint(server.get("remote_path")),
+        normalized_mountpoint_fingerprint(server.get("mountpoint")),
     )
 
 
-def exact_connection_fingerprint(server: dict) -> tuple[str, str, str]:
+def normalized_remote_path_fingerprint(value: object) -> str:
+    return compose_remote_path(*split_remote_path(str(value or "")))
+
+
+def normalized_mountpoint_fingerprint(value: object) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() == "auto":
+        return ""
+    if text == HOME_MOUNTPOINT_VALUE:
+        return HOME_MOUNTPOINT_VALUE
+    if is_windows_mount_drive(text):
+        return text.upper().rstrip("\\/")
+    return str(Path(text).expanduser())
+
+
+def exact_connection_fingerprint(server: dict) -> tuple[str, str, str, str, str]:
     return (
         str(server.get("host") or "").strip(),
         str(server.get("user") or "").strip(),
         normalized_target_port(server.get("port")),
+        normalized_remote_path_fingerprint(server.get("remote_path")),
+        normalized_mountpoint_fingerprint(server.get("mountpoint")),
     )
 
 
@@ -3567,6 +3604,26 @@ class ServerDialog:
         entry.pack(side=LEFT, fill=X, expand=True, padx=(6, 0))
         self.values["remote_suffix"] = entry
 
+    def row_mountpoint(self, mountpoint: str, parent=None) -> ttk.Combobox:
+        frame = Frame(parent or self.form, padx=10, pady=4)
+        frame.pack(fill=X)
+        self.label(frame, self.t("mountpoint"))
+        choice = ttk.Combobox(frame, values=mountpoint_choices(self.lang), state="readonly", width=18)
+        choice.set(mountpoint_value_to_choice(mountpoint, self.lang))
+        choice.pack(side=LEFT)
+        self.values["mountpoint"] = choice
+        custom_entry = Entry(frame)
+        if is_custom_mountpoint(mountpoint) and not is_windows_mount_drive(mountpoint):
+            custom_entry.insert(0, mountpoint)
+        custom_entry.pack(side=LEFT, fill=X, expand=True, padx=(6, 0))
+        self.values["custom_mountpoint"] = custom_entry
+        browse_button = Button(frame, text="...", command=self.pick_mountpoint_folder)
+        browse_button.pack(side=RIGHT)
+        self.mountpoint_browse_button = browse_button
+        choice.bind("<<ComboboxSelected>>", lambda _event: self.update_mountpoint_controls())
+        self.update_mountpoint_controls()
+        return choice
+
     def build(self) -> None:
         source_frame = Frame(self.form, padx=10, pady=4)
         source_frame.pack(fill=X)
@@ -3625,13 +3682,7 @@ class ServerDialog:
         self.connection_help = Label(self.single_frame, text=self.t("openssh_help"), fg="#666666", wraplength=520, justify=LEFT)
 
         self.row_remote_path(self.existing.get("remote_path", ""), parent=self.single_frame)
-        mountpoint_combo = self.row_combo(
-            self.t("mountpoint"),
-            "mountpoint",
-            mountpoint_choices(self.lang),
-            mountpoint_value_to_choice(self.existing.get("mountpoint", ""), self.lang),
-            parent=self.single_frame,
-        )
+        mountpoint_combo = self.row_mountpoint(self.existing.get("mountpoint", ""), parent=self.single_frame)
         Tooltip(mountpoint_combo, self.t("mountpoint_help"))
 
         self.build_batch_frame()
@@ -3703,6 +3754,13 @@ class ServerDialog:
         if path:
             self.batch_config_path.set(path)
             self.load_batch_preview()
+
+    def pick_mountpoint_folder(self) -> None:
+        path = filedialog.askdirectory()
+        if path:
+            self.set_value("custom_mountpoint", path)
+            self.set_value("mountpoint", custom_mountpoint_label(self.lang))
+            self.update_mountpoint_controls()
 
     def load_batch_preview(self) -> None:
         path = Path(self.batch_config_path.get()).expanduser()
@@ -3889,8 +3947,41 @@ class ServerDialog:
         entry = self.values.get(key)
         if not entry:
             return
-        entry.delete(0, END)
-        entry.insert(0, value or "")
+        previous_state = None
+        try:
+            previous_state = str(entry.cget("state"))
+        except Exception:
+            previous_state = None
+        try:
+            if previous_state == "disabled":
+                entry.configure(state="normal")
+            if hasattr(entry, "set"):
+                entry.set(value or "")
+            else:
+                entry.delete(0, END)
+                entry.insert(0, value or "")
+        finally:
+            if previous_state == "disabled":
+                try:
+                    entry.configure(state=previous_state)
+                except Exception:
+                    pass
+
+    def update_mountpoint_controls(self) -> None:
+        custom = mountpoint_is_custom_choice(self.get("mountpoint"), self.lang)
+        for key in ("custom_mountpoint",):
+            widget = self.values.get(key)
+            if widget:
+                try:
+                    widget.configure(state="normal" if custom else "disabled")
+                except Exception:
+                    pass
+        button = getattr(self, "mountpoint_browse_button", None)
+        if button:
+            try:
+                button.configure(state="normal" if custom else "disabled")
+            except Exception:
+                pass
 
     def update_source_controls(self) -> None:
         source = self.source.get()
@@ -4007,6 +4098,8 @@ class ServerDialog:
         self.set_value("remote_base", base)
         self.set_value("remote_suffix", suffix)
         self.set_value("mountpoint", mountpoint_value_to_choice(defaults["mountpoint"], self.lang))
+        self.set_value("custom_mountpoint", "")
+        self.update_mountpoint_controls()
         self.last_sai_profile_name = defaults["name"]
         self.update_connection_method_controls()
 
@@ -4021,6 +4114,8 @@ class ServerDialog:
         self.set_value("remote_base", base)
         self.set_value("remote_suffix", suffix)
         self.set_value("mountpoint", mountpoint_value_to_choice("", self.lang))
+        self.set_value("custom_mountpoint", "")
+        self.update_mountpoint_controls()
         self.update_connection_method_controls()
 
     def on_sai_user_changed(self, _event=None) -> None:
@@ -4134,7 +4229,7 @@ class ServerDialog:
                 name = sai_name
 
         server_id = self.existing.get("id") or "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)
-        mountpoint = mountpoint_choice_to_value(self.get("mountpoint"), self.lang)
+        mountpoint = mountpoint_choice_to_value(self.get("mountpoint"), self.lang, self.get("custom_mountpoint"))
         mountpoint_error = validate_mountpoint_for_save(mountpoint)
         if mountpoint_error:
             messagebox.showerror(APP_TITLE, self.t("invalid_mountpoint", reason=mountpoint_error))
