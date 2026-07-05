@@ -106,7 +106,7 @@ def main() -> int:
         "--name",
         "SSHMountMate",
         "--windowed",
-        "--onefile",
+        "--onedir",
         "--distpath",
         str(dist),
         "--workpath",
