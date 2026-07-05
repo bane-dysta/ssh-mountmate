@@ -99,6 +99,7 @@ def main() -> int:
     data_separator = ";" if sys.platform.startswith("win") else ":"
     assets = prepare_assets(root)
     rclone = prepare_rclone_binary(root)
+    packaging_mode = "--onedir" if sys.platform.startswith("win") else "--onefile"
     cmd = [
         sys.executable,
         "-m",
@@ -106,7 +107,7 @@ def main() -> int:
         "--name",
         "SSHMountMate",
         "--windowed",
-        "--onedir",
+        packaging_mode,
         "--distpath",
         str(dist),
         "--workpath",
