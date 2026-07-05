@@ -3805,7 +3805,7 @@ class ServerDialog:
         batch = source == "ssh_config_batch"
         if batch:
             self.single_frame.pack_forget()
-            self.batch_frame.pack(fill=BOTH, expand=True, before=self.buttons_frame)
+            self.batch_frame.pack(fill=BOTH, expand=True)
             self.save_button.configure(text=self.t("import_configs"))
         else:
             self.batch_frame.pack_forget()
@@ -3828,6 +3828,7 @@ class ServerDialog:
                 except Exception:
                     pass
         self.update_connection_method_controls()
+        self.update_scrollregion()
 
     def set_required_star(self, key: str, visible: bool) -> None:
         star = self.required_stars.get(key)
