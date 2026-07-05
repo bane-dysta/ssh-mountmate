@@ -3801,7 +3801,7 @@ class ServerDialog:
 
     def batch_item_action_choices(self, item: dict) -> list[str]:
         status = item.get("status")
-        actions = ["import"] if status == "NEW" else ["ignore"]
+        actions = ["import", "ignore"] if status == "NEW" else ["ignore"]
         if item.get("can_overwrite"):
             actions.append("overwrite")
         return [self.batch_action_label(action) for action in actions]
