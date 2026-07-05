@@ -155,6 +155,10 @@ TEXT = {
         "imported_configs": "Imported {count} configs.",
         "batch_skipped": "Skipped {count} duplicate or invalid configs.",
         "batch_import_notice": "Importing {new_count} new configs. {skip_count} duplicate or invalid configs will be skipped.",
+        "batch_conflicts": "Duplicate configs",
+        "batch_ignore": "Ignore",
+        "batch_overwrite": "Overwrite",
+        "batch_overwrite_help": "Overwrite updates the saved SSH connection fields and keeps local mount settings such as remote path and mountpoint.",
         "manual": "Manual",
         "ssh_host": "SSH Host",
         "name": "Name",
@@ -301,6 +305,10 @@ TEXT = {
         "imported_configs": "已导入 {count} 个配置。",
         "batch_skipped": "已跳过 {count} 个重复或无效配置。",
         "batch_import_notice": "将导入 {new_count} 个新配置，并跳过 {skip_count} 个重复或无效配置。",
+        "batch_conflicts": "重复配置",
+        "batch_ignore": "忽略",
+        "batch_overwrite": "覆盖",
+        "batch_overwrite_help": "覆盖只更新已保存配置里的 SSH 连接字段，并保留远程路径、挂载点等本地挂载设置。",
         "manual": "手动",
         "ssh_host": "SSH Host",
         "name": "名称",
@@ -1680,10 +1688,36 @@ def batch_duplicate_reason(server: dict, known: list[dict]) -> str:
     return ""
 
 
+def batch_duplicate_match(server: dict, known: list[dict]) -> tuple[str, dict | None]:
+    server_full = full_batch_fingerprint(server)
+    server_alias = normalized_host_alias(server)
+    server_target = target_fingerprint(server)
+    for existing in known:
+        if server_full == full_batch_fingerprint(existing):
+            return "SAME", existing
+    if server_alias:
+        for existing in known:
+            if server_alias == normalized_host_alias(existing):
+                return "SAME HOST", existing
+    for existing in known:
+        if server_target == target_fingerprint(existing):
+            return "SAME TARGET", existing
+    return "", None
+
+
+def merge_batch_overwrite(existing: dict, imported: dict) -> dict:
+    merged = dict(existing)
+    for key in ("name", "mode", "source", "host_alias", "host", "user", "port", "auth", "key_file", "connection_method"):
+        merged[key] = imported.get(key, "")
+    if not merged.get("id"):
+        merged["id"] = sanitize_server_id(merged.get("name") or merged.get("host_alias") or merged.get("host") or "")
+    return merged
+
+
 def ssh_config_batch_plan(config_path: str | Path, existing_servers: list[dict] | None = None) -> dict:
     path = Path(config_path).expanduser()
     hosts = list_ssh_config_hosts(path)
-    existing = [dict(server) for server in (existing_servers or [])]
+    existing = [dict(server, __batch_existing=True) for server in (existing_servers or [])]
     accepted: list[dict] = []
     skipped: list[dict] = []
     errors: list[dict] = []
@@ -1701,9 +1735,19 @@ def ssh_config_batch_plan(config_path: str | Path, existing_servers: list[dict] 
             errors.append(item)
             statuses[host_alias] = item
             continue
-        reason = batch_duplicate_reason(server, [*existing, *accepted])
+        reason, matched = batch_duplicate_match(server, [*existing, *accepted])
         if reason:
-            item = {"host": host_alias, "status": reason, "reason": duplicate_reason_text(reason), "server": server}
+            can_overwrite = bool(matched and matched.get("__batch_existing"))
+            if matched:
+                matched = {key: value for key, value in matched.items() if key != "__batch_existing"}
+            item = {
+                "host": host_alias,
+                "status": reason,
+                "reason": duplicate_reason_text(reason),
+                "server": server,
+                "match": matched,
+                "can_overwrite": can_overwrite,
+            }
             skipped.append(item)
             statuses[host_alias] = item
             continue
@@ -1727,9 +1771,10 @@ def ssh_config_batch_servers(config_path: str | Path, existing_servers: list[dic
     return plan["servers"], messages
 
 
-def annotated_ssh_config_preview(config_path: str | Path, existing_servers: list[dict] | None = None) -> str:
+def annotated_ssh_config_preview(config_path: str | Path, existing_servers: list[dict] | None = None, plan: dict | None = None) -> str:
     path = Path(config_path).expanduser()
-    plan = ssh_config_batch_plan(path, existing_servers)
+    if plan is None:
+        plan = ssh_config_batch_plan(path, existing_servers)
     statuses = plan["statuses"]
     entries = [entry for entry in list_ssh_config_host_entries(path) if Path(entry["path"]).resolve() == path.resolve()]
     line_annotations: dict[int, list[str]] = {}
@@ -3247,24 +3292,42 @@ class App:
             used_mount_folders: set[str] = set()
             for server in self.servers:
                 add_used_server_name(server_name_base(server), used_names, used_mount_folders)
+            changed_results: list[dict] = []
             for result in results:
+                action = result.pop("__batch_action", "")
+                target_id = result.pop("__batch_target_id", "")
+                if action == "overwrite" and target_id:
+                    for index, existing in enumerate(self.servers):
+                        if str(existing.get("id") or "") == str(target_id):
+                            merged = merge_batch_overwrite(existing, result)
+                            used_names_without_target: set[str] = set()
+                            used_mount_folders_without_target: set[str] = set()
+                            for other_index, other in enumerate(self.servers):
+                                if other_index != index:
+                                    add_used_server_name(server_name_base(other), used_names_without_target, used_mount_folders_without_target)
+                            merged["name"] = make_unique_server_name(server_name_base(merged), used_names_without_target, used_mount_folders_without_target)
+                            self.servers[index] = merged
+                            changed_results.append(merged)
+                            break
+                    continue
                 result["name"] = make_unique_server_name(server_name_base(result), used_names, used_mount_folders)
                 add_used_server_name(result["name"], used_names, used_mount_folders)
                 result["id"] = make_unique_server_id(result.get("id") or result.get("name", ""), used_ids)
                 used_ids.add(result["id"])
                 self.servers.append(result)
+                changed_results.append(result)
             save_servers(self.servers)
             if load_settings().get("startup_all"):
                 startup_errors: list[str] = []
-                for result in results:
+                for result in changed_results:
                     try:
                         enable_startup(result)
                     except Exception as exc:
                         startup_errors.append(self.format_startup_error(result, True, exc))
                 if startup_errors:
                     self.report_startup_errors(startup_errors)
-            if len(results) > 1:
-                self.status.set(self.t("imported_configs", count=len(results)))
+            if len(changed_results) > 1:
+                self.status.set(self.t("imported_configs", count=len(changed_results)))
             self.refresh_list()
             self.refresh_mount_status_async()
 
@@ -3394,6 +3457,7 @@ class ServerDialog:
         self.copy_key_to_ssh = BooleanVar(value=bool(self.existing.get("copy_key_to_ssh_dir", False)))
         self.values: dict[str, Entry] = {}
         self.required_stars: dict[str, Label] = {}
+        self.batch_conflict_actions: dict[str, tuple[dict, StringVar]] = {}
         self.last_sai_profile_name = sai_profile_name(self.existing.get("user", ""))
         self.batch_config_path = StringVar(value=str(Path.home() / ".ssh" / "config"))
         self.window = Toplevel(root)
@@ -3401,12 +3465,16 @@ class ServerDialog:
         self.window.geometry("660x600")
         self.window.minsize(560, 420)
         self.window.resizable(True, True)
-        self.canvas = Canvas(self.window, highlightthickness=0)
-        self.scrollbar = Scrollbar(self.window, orient="vertical", command=self.canvas.yview)
+        self.buttons_frame = Frame(self.window, padx=10, pady=10)
+        self.buttons_frame.pack(side="bottom", fill=X)
+        self.content_frame = Frame(self.window)
+        self.content_frame.pack(side="top", fill=BOTH, expand=True)
+        self.canvas = Canvas(self.content_frame, highlightthickness=0)
+        self.scrollbar = Scrollbar(self.content_frame, orient="vertical", command=self.canvas.yview)
         self.form = Frame(self.canvas)
-        self.form.bind("<Configure>", lambda _event: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.form.bind("<Configure>", lambda _event: self.update_scrollregion())
         self.form_window = self.canvas.create_window((0, 0), window=self.form, anchor="nw")
-        self.canvas.bind("<Configure>", lambda event: self.canvas.itemconfigure(self.form_window, width=event.width))
+        self.canvas.bind("<Configure>", self.on_canvas_configure)
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
         self.canvas.pack(side=LEFT, fill=BOTH, expand=True)
         self.scrollbar.pack(side=RIGHT, fill=Y)
@@ -3551,8 +3619,6 @@ class ServerDialog:
 
         self.build_batch_frame()
 
-        self.buttons_frame = Frame(self.form, padx=10, pady=10)
-        self.buttons_frame.pack(fill=X)
         self.save_button = Button(self.buttons_frame, text=self.t("save"), command=self.save)
         self.save_button.pack(side=RIGHT)
         Button(self.buttons_frame, text=self.t("cancel"), command=self.window.destroy).pack(side=RIGHT, padx=6)
@@ -3588,6 +3654,17 @@ class ServerDialog:
         self.batch_preview.bind("<MouseWheel>", self.on_batch_preview_mousewheel)
         self.batch_preview.bind("<Button-4>", self.on_batch_preview_mousewheel)
         self.batch_preview.bind("<Button-5>", self.on_batch_preview_mousewheel)
+
+        self.batch_conflicts_frame = Frame(self.batch_frame)
+        conflicts_header = Frame(self.batch_conflicts_frame)
+        conflicts_header.pack(fill=X)
+        Label(conflicts_header, text=self.t("batch_conflicts"), anchor="w").pack(side=LEFT)
+        help_label = Label(conflicts_header, text="?", fg="#666666")
+        help_label.pack(side=LEFT, padx=(6, 0))
+        Tooltip(help_label, self.t("batch_overwrite_help"))
+        self.batch_conflicts_body = Frame(self.batch_conflicts_frame)
+        self.batch_conflicts_body.pack(fill=X)
+
         self.load_batch_preview()
 
     def on_batch_preview_mousewheel(self, event):
@@ -3613,15 +3690,75 @@ class ServerDialog:
     def load_batch_preview(self) -> None:
         path = Path(self.batch_config_path.get()).expanduser()
         try:
-            content = annotated_ssh_config_preview(path, self.existing_servers)
+            plan = ssh_config_batch_plan(path, self.existing_servers)
+            content = annotated_ssh_config_preview(path, self.existing_servers, plan)
         except Exception as exc:
+            plan = None
             content = str(exc)
         self.batch_preview.configure(state="normal")
         self.batch_preview.delete("1.0", END)
         self.batch_preview.insert("1.0", content)
         self.batch_preview.configure(state="disabled")
+        self.update_batch_conflicts(plan)
+
+    def update_batch_conflicts(self, plan: dict | None) -> None:
+        if not hasattr(self, "batch_conflicts_body"):
+            return
+        for child in self.batch_conflicts_body.winfo_children():
+            child.destroy()
+        self.batch_conflict_actions = {}
+        conflicts = []
+        if plan:
+            conflicts = [item for item in plan.get("skipped", []) if item.get("can_overwrite")]
+        if not conflicts:
+            if hasattr(self, "batch_conflicts_frame"):
+                self.batch_conflicts_frame.pack_forget()
+            return
+        self.batch_conflicts_frame.pack(fill=X, padx=10, pady=(8, 0))
+        for item in conflicts:
+            row = Frame(self.batch_conflicts_body)
+            row.pack(fill=X, pady=1)
+            match = item.get("match") or {}
+            label = f"{item['host']} - {item['status']} ({match.get('name') or match.get('host_alias') or match.get('id') or ''})"
+            Label(row, text=label, anchor="w").pack(side=LEFT, fill=X, expand=True)
+            action = StringVar(value="ignore")
+            combo = ttk.Combobox(row, values=[self.t("batch_ignore"), self.t("batch_overwrite")], width=12, state="readonly")
+            combo.set(self.t("batch_ignore"))
+
+            def on_action_changed(_event=None, var=action, widget=combo):
+                var.set("overwrite" if widget.get() == self.t("batch_overwrite") else "ignore")
+
+            combo.bind("<<ComboboxSelected>>", on_action_changed)
+            combo.pack(side=RIGHT)
+            self.batch_conflict_actions[str(item["host"])] = (item, action)
+        self.update_scrollregion()
+
+    def on_canvas_configure(self, event) -> None:
+        self.canvas.itemconfigure(self.form_window, width=event.width)
+        self.update_scrollregion()
+
+    def update_scrollregion(self) -> None:
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if not bbox:
+            self.canvas.configure(scrollregion=(0, 0, self.canvas.winfo_width(), self.canvas.winfo_height()))
+            return
+        x1, y1, x2, y2 = bbox
+        height = max(y2 - y1, self.canvas.winfo_height())
+        self.canvas.configure(scrollregion=(0, 0, max(x2 - x1, self.canvas.winfo_width()), height))
+        if y2 - y1 <= self.canvas.winfo_height():
+            self.canvas.yview_moveto(0)
+
+    def can_scroll_form(self) -> bool:
+        bbox = self.canvas.bbox("all")
+        if not bbox:
+            return False
+        return (bbox[3] - bbox[1]) > self.canvas.winfo_height()
 
     def on_mousewheel(self, event) -> None:
+        if not self.can_scroll_form():
+            self.canvas.yview_moveto(0)
+            return "break"
         if getattr(event, "num", None) == 4:
             direction = -1
         elif getattr(event, "num", None) == 5:
@@ -3630,6 +3767,7 @@ class ServerDialog:
             delta = getattr(event, "delta", 0)
             direction = -1 if delta > 0 else 1
         self.canvas.yview_scroll(direction, "units")
+        return "break"
 
     def bind_mousewheel_recursive(self, widget) -> None:
         if widget is getattr(self, "batch_preview", None):
@@ -3836,7 +3974,19 @@ class ServerDialog:
         source = self.source.get()
         if source == "ssh_config_batch":
             plan = ssh_config_batch_plan(self.batch_config_path.get(), self.existing_servers)
-            servers = plan["servers"]
+            servers = list(plan["servers"])
+            overwrite_count = 0
+            for item, action in self.batch_conflict_actions.values():
+                if action.get() != "overwrite":
+                    continue
+                match = item.get("match") or {}
+                if not match.get("id"):
+                    continue
+                server = dict(item.get("server") or {})
+                server["__batch_action"] = "overwrite"
+                server["__batch_target_id"] = str(match["id"])
+                servers.append(server)
+                overwrite_count += 1
             skipped = [*plan["skipped"], *plan["errors"]]
             if not servers:
                 message = self.t("no_importable_hosts")
@@ -3844,8 +3994,9 @@ class ServerDialog:
                     message += "\n\n" + "\n".join(f"{item['host']}: {item['status']} {item.get('reason', '')}".strip() for item in skipped)
                 messagebox.showerror(APP_TITLE, message)
                 return
-            if skipped:
-                messagebox.showinfo(APP_TITLE, self.t("batch_import_notice", new_count=len(servers), skip_count=len(skipped)))
+            ignored_count = max(0, len(skipped) - overwrite_count)
+            if ignored_count:
+                messagebox.showinfo(APP_TITLE, self.t("batch_import_notice", new_count=len(servers), skip_count=ignored_count))
             self.result = servers
             self.window.destroy()
             return
