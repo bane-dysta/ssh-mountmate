@@ -188,7 +188,7 @@ TEXT = {
         "mountpoint_preset": "Mountpoint preset",
         "custom_mountpoint": "Custom mountpoint",
         "home_mountpoint": "User folder (~/mnt/name)",
-        "mountpoint_help": "Use Auto, a drive letter on Windows, or a custom absolute folder. macOS/Linux folders are created if missing. Windows folder mountpoints need an existing parent and a non-existing target folder.",
+        "mountpoint_help": "Use Auto, a drive letter on Windows, or a custom absolute folder. The browse button selects the parent folder and fills a generated child mountpoint. macOS/Linux folders are created if missing. Windows folder mountpoints need an existing parent and a non-existing target folder.",
         "invalid_mountpoint": "Invalid mountpoint: {reason}",
         "save": "Save",
         "cancel": "Cancel",
@@ -344,7 +344,7 @@ TEXT = {
         "mountpoint_preset": "挂载点预设",
         "custom_mountpoint": "自定义挂载点",
         "home_mountpoint": "用户文件夹 (~/mnt/名称)",
-        "mountpoint_help": "可以使用 Auto、Windows 盘符，或自定义绝对路径文件夹。macOS/Linux 文件夹不存在时会创建；Windows 文件夹挂载要求父目录已存在，目标文件夹本身不能已存在。",
+        "mountpoint_help": "可以使用 Auto、Windows 盘符，或自定义绝对路径文件夹。浏览按钮选择父文件夹，并自动填入生成的子挂载点。macOS/Linux 文件夹不存在时会创建；Windows 文件夹挂载要求父目录已存在，目标文件夹本身不能已存在。",
         "invalid_mountpoint": "挂载点无效：{reason}",
         "save": "保存",
         "cancel": "取消",
@@ -941,6 +941,19 @@ def mountpoint_folder_name_for_name(name: str) -> str:
 
 def mountpoint_folder_key_for_name(name: str) -> str:
     return mountpoint_folder_name_for_name(name).casefold()
+
+
+def unique_child_mountpoint(parent: str | Path, name: str) -> Path:
+    parent_path = Path(parent).expanduser()
+    root = mountpoint_folder_name_for_name(name or "mount")
+    candidate = parent_path / root
+    if not candidate.exists():
+        return candidate
+    for number in range(2, 1000):
+        candidate = parent_path / f"{root}-{number}"
+        if not candidate.exists():
+            return candidate
+    return parent_path / f"{root}-{uuid.uuid4().hex[:8]}"
 
 
 def make_unique_server_name(base: str, used_names: set[str], used_mount_folders: set[str]) -> str:
@@ -3764,7 +3777,8 @@ class ServerDialog:
     def pick_mountpoint_folder(self) -> None:
         path = filedialog.askdirectory()
         if path:
-            self.set_value("custom_mountpoint", path)
+            mount_name = self.get("name") or self.get("host_alias") or self.get("host") or "mount"
+            self.set_value("custom_mountpoint", str(unique_child_mountpoint(path, mount_name)))
             self.set_value("mountpoint", custom_mountpoint_label(self.lang))
             self.update_mountpoint_controls()
 
